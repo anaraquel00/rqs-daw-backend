@@ -1,0 +1,16 @@
+{
+  "name": "daw-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "mix-generator.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}
