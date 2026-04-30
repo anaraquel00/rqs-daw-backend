@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const ffmpeg = require('fluent-ffmpeg');end
+const ffmpeg = require('fluent-ffmpeg');
 
 // 🛡️ Mapeamento de Rotas
 const inputDir = path.join(__dirname, 'blueprint-inputs');
