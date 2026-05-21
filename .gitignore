@@ -1,1 +1,17 @@
+# Dependências do Node
 node_modules/
+
+# Bloqueio Nuclear de Ambientes Virtuais
+**/venv/
+**/.venv/
+**/__pycache__/
+
+# Arquivos de Áudio (Proteção de Copyright e Peso)
+uploads/
+*.wav
+*.mp3
+*.ogg
+
+# Variáveis de Ambiente e Sistema
+.env
+.DS_Store
