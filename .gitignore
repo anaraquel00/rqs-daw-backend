@@ -15,3 +15,7 @@ uploads/
 # Variáveis de Ambiente e Sistema
 .env
 .DS_Store
+venv/
+.venv/
+node_modules/
+__pycache__/
