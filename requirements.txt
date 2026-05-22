@@ -1,0 +1,15 @@
+cffi==2.0.0
+-e git+https://github.com/anaraquel00/rqs-daw-frontend.git@69cd98d454cf143c85558283d8931d3690d9a540#egg=gyp_next&subdirectory=node_modules/node-gyp/gyp
+iniconfig==2.3.0
+numpy==2.4.6
+packaging==26.2
+pedalboard==0.9.23
+pluggy==1.6.0
+pycparser==3.0
+Pygments==2.20.0
+pyloudnorm==0.2.0
+pytest==9.0.3
+ruff==0.15.13
+scipy==1.17.1
+setuptools==82.0.1
+soundfile==0.13.1
