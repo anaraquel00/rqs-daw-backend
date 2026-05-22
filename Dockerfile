@@ -28,5 +28,5 @@ COPY . .
 # 7. Libera a porta de comunicação
 EXPOSE 3000
 
-# 8. O Comando de Ignição Definitivo
-CMD ["node", "server.js"]
+# 8. O Comando de Ignição Definitivo (Node estrangulado em 80MB de RAM máxima)
+CMD ["node", "--max-old-space-size=80", "server.js"]
