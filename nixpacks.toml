@@ -1,0 +1,10 @@
+# 🛡️ Matriz de Processamento Híbrido RQS-DAW
+providers = ["node", "python"]
+
+[phases.setup]
+# O motor Python precisa do libsndfile no Linux para mastigar os arquivos .wav!
+nixPkgs = ["...", "libsndfile"]
+
+[start]
+# A ordem de boot absoluta
+cmd = "node server.js"

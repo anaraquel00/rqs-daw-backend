@@ -20,14 +20,17 @@ router.post('/process', upload.single('audio'), (req, res) => {
        // O frontend envia req.body.preview = 'true' para testar, ou 'false' para masterizar a valer.
         const isPreview = req.body.preview === 'true' ? 'true' : 'false';
 
-        const pythonProcess = spawn('./venv/bin/python3', [
-    pythonScriptPath, 
-    inputPath, 
-    outputPath, 
-    estilo, 
-    intensidade,
-    isPreview 
-         ]);
+     // 🛡️ O Câmbio Automático: Se estiver na nuvem (usa a porta da Railway), roda o Python global. Se for no seu Acer, usa a venv.
+        const pythonCommand = process.env.PORT ? 'python3' : './venv/bin/python3';
+
+        const pythonProcess = spawn(pythonCommand, [
+        pythonScriptPath, 
+        inputPath, 
+        outputPath, 
+        estilo, 
+        intensidade,
+        isPreview 
+        ]);
 
         pythonProcess.stdout.on('data', (data) => {
             const output = data.toString().trim();
