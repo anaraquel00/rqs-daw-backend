@@ -4,7 +4,12 @@ const app = express();
 
 // 🛡️ O Patch de Segurança (Aceita localhost e a futura Vercel)
 app.use(cors({
-    origin: ['http://localhost:4200', 'https://rqs-daw-frontend.vercel.app']
+    origin: ['http://localhost:4200', 
+        'https://rqs-daw-frontend.vercel.app', 
+        'https://studio.raquelsynths.com.br'],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+        
 }));
 app.use(express.json());
 
