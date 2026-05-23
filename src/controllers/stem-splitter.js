@@ -30,8 +30,6 @@ router.post('/split', upload.single('audio'), (req, res) => {
 
     console.log(`[STEM SPLITTER] Iniciando extração molecular para: ${inputPath}`);
 
-    // 3. Invoca o Motor Python em Segundo Plano
-    const pyProcess = spawn('python3', [scriptPath, inputPath, outputDir]);
     // 3. Invoca o Motor Python com Roteamento Absoluto (Bypass do Servidor)
     const venvPython = path.join(__dirname, '../../../.venv/bin/python3');
     const pyProcess = spawn(venvPython, [scriptPath, inputPath, outputDir]);
