@@ -12,15 +12,17 @@ app.use(express.json());
 const masteringRouter = require('./src/controllers/mastering');
 const mixRouter = require('./src/controllers/mix-generator');
 const videoRouter = require('./src/controllers/video-engine');
+const stemsRouter = require('./src/controllers/stem-splitter');
 
 // 🛤️ Acoplando as Rotas (A Mágica da Unificação)
 app.use('/api/v1/mastering', masteringRouter);
 app.use('/api/v1/mix', mixRouter);
 app.use('/api/v1/video', videoRouter);
+app.use('/api/v1/stems', stemsRouter);
 
 // 🚀 Boot do Sistema
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`[RQS MAINFRAME] Sistema unificado online na porta ${PORT}`);
-    console.log(`[RQS MAINFRAME] Módulos operacionais: [DSP] [MIXER] [VIDEO]`);
+    console.log(`[RQS MAINFRAME] Módulos operacionais: [DSP] [MIXER] [VIDEO] [STEMS]`);
 });
