@@ -50,8 +50,13 @@ def separate_and_zip(input_path, base_output_dir):
         # 5. Telemetria de Retorno (O Node.js vai ler este print)
         print(f"SUCCESS:{zip_filepath}")
         
+    except subprocess.CalledProcessError as e:
+        # Extrai a mensagem de erro real que o Demucs cuspiu no terminal
+        error_msg = e.stderr.decode('utf-8') if e.stderr else str(e)
+        print(f"ERROR: Colapso no Motor Demucs -> {error_msg}", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
-        print(f"ERROR:{str(e)}", file=sys.stderr)
+        print(f"ERROR: {str(e)}", file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
