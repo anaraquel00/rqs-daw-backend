@@ -65,7 +65,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         dynamic_ratio = float(1.5 if crest_factor_db < 10.0 else 2.5)
         dynamic_threshold = float(input_lufs + 3.0)
 
-        # 4. MATRIZ MID/SIDE ADAPTATIVA
+        # 4. MATRIZ MID/SIDE ADAPTATIVA E INTELIGENTE
         L = audio_data[0, :]
         R = audio_data[1, :]
         
@@ -73,45 +73,73 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         mid = ((L + R) * 0.5).astype(np.float32)
         side = ((L - R) * 0.5).astype(np.float32)
         
-        # Filtro subsônico rigoroso no canal MID para expurgar 'Rumble' e DC offsets indesejados da Suno AI
+        # Filtro subsônico rigoroso no canal MID para expurgar 'Rumble' e DC offsets indesejados
         hp_mid = Pedalboard([HighpassFilter(cutoff_frequency_hz=30)])
         mid_filtered = hp_mid(mid[np.newaxis, :], sample_rate)[0]
 
         # Divisão multibanda no canal MID filtrado
         mid_low, mid_mid, mid_high = split_bands(mid_filtered, sample_rate)
 
-        # Configurações dinâmicas para as 3 bandas físicas do MID
-        # LOW: Compressão firme para reter a energia do subgrave sem pulsações irritantes
-        comp_low = Compressor(threshold_db=dynamic_threshold - 3.0, ratio=dynamic_ratio * 1.5, attack_ms=30.0, release_ms=200.0)
+        # CÁLCULO DE RMS INDIVIDUAL POR BANDA
+        def get_band_rms_db(band_data):
+            rms_val = np.sqrt(np.mean(band_data**2))
+            return float(20 * np.log10(rms_val + 1e-9))
+
+        rms_low_db = get_band_rms_db(mid_low)
+        rms_mid_db = get_band_rms_db(mid_mid)
+        rms_high_db = get_band_rms_db(mid_high)
+
+        # Configurações dinâmicas ancoradas na energia REAL de cada banda (e não no LUFS global)
+        # LOW: Compressão firme (Threshold 2.5dB abaixo do RMS da banda) para segurar o subgrave
+        comp_low = Compressor(threshold_db=rms_low_db - 2.5, ratio=dynamic_ratio * 1.5, attack_ms=30.0, release_ms=200.0)
         mid_low_processed = comp_low(mid_low[np.newaxis, :], sample_rate)[0]
 
-        # MID: Foco na naturalidade de instrumentos e vocais
-        comp_mid = Compressor(threshold_db=dynamic_threshold, ratio=dynamic_ratio, attack_ms=15.0, release_ms=150.0)
+        # MID: Compressão musical (Threshold exatamente no RMS) para colar os vocais/instrumentos
+        comp_mid = Compressor(threshold_db=rms_mid_db, ratio=dynamic_ratio, attack_ms=15.0, release_ms=150.0)
         mid_mid_processed = comp_mid(mid_mid[np.newaxis, :], sample_rate)[0]
 
-        # HIGH: De-esser e controle de agudos estridentes gerados por geradores neurais
-        comp_high = Compressor(threshold_db=dynamic_threshold - 1.5, ratio=max(1.1, dynamic_ratio * 0.8), attack_ms=3.0, release_ms=50.0)
+        # HIGH: De-esser ágil (Threshold 3dB abaixo do RMS) para controlar aspereza da IA
+        comp_high = Compressor(threshold_db=rms_high_db - 3.0, ratio=max(1.2, dynamic_ratio * 0.8), attack_ms=3.0, release_ms=50.0)
         mid_high_processed = comp_high(mid_high[np.newaxis, :], sample_rate)[0]
 
         # Recombinação perfeita de banda
         mid_processed = mid_low_processed + mid_mid_processed + mid_high_processed
 
-        # Estilo de Modelagem Analógica / EQ
+        # Estilo de Modelagem Analógica / EQ ADAPTATIVO
+        # Evita "embolar" o grave se a música já tiver muito peso no balanço tonal
+        bass_intensity = rms_low_db - rms_mid_db
+        
         if estilo == "aberto":
-            shelf_mid = Pedalboard([LowShelfFilter(cutoff_frequency_hz=60.0, gain_db=1.0)])
+            # Reduz o ganho do Shelf se o subgrave já estiver dominando a mix
+            gain_low = max(0.0, 1.5 - (bass_intensity * 0.2)) if bass_intensity > 0 else 1.5
+            shelf_mid = Pedalboard([LowShelfFilter(cutoff_frequency_hz=60.0, gain_db=gain_low)])
             mid_processed = shelf_mid(mid_processed[np.newaxis, :], sample_rate)[0]
         elif estilo == "quente":
-            shelf_mid = Pedalboard([LowShelfFilter(cutoff_frequency_hz=100.0, gain_db=2.0)])
+            gain_low = max(0.0, 2.5 - (bass_intensity * 0.3)) if bass_intensity > 0 else 2.5
+            shelf_mid = Pedalboard([LowShelfFilter(cutoff_frequency_hz=100.0, gain_db=gain_low)])
             mid_processed = shelf_mid(mid_processed[np.newaxis, :], sample_rate)[0]
 
-        # Processamento do canal espacial SIDE (Filtro passa-altas rigoroso previne cancelamento mono no subgrave)
+        # Processamento do canal espacial SIDE (Alargamento Estéreo Dinâmico)
         board_side = Pedalboard([HighpassFilter(cutoff_frequency_hz=150.0)])
+        
+        # Expansão Dinâmica do Estéreo (Upward Compression)
+        # Comprimimos levemente o side com um threshold bem baixo e compensamos o ganho.
+        # Isso puxa os detalhes do estéreo (reverbs, synths largos) para a frente sem destruir a fase.
+        rms_side_db = get_band_rms_db(side)
+        # Limitamos o threshold do side a no mínimo -40dB para não amplificar chiado de fundo
+        side_comp = Compressor(threshold_db=max(-40.0, rms_side_db - 8.0), ratio=1.5, attack_ms=20.0, release_ms=100.0)
+        board_side.append(side_comp)
+        
+        # Ganho de Make-up para inflar a imagem estéreo (menos agressivo se o crest factor já for alto)
+        stereo_width_gain = 2.0 if crest_factor_db < 10.0 else 3.5
+        board_side.append(Gain(gain_db=stereo_width_gain))
+
         if estilo == "aberto":
-            board_side.append(HighShelfFilter(cutoff_frequency_hz=6000.0, gain_db=1.5))
+            board_side.append(HighShelfFilter(cutoff_frequency_hz=6000.0, gain_db=2.0))
         elif estilo == "quente":
             board_side.append(HighShelfFilter(cutoff_frequency_hz=4000.0, gain_db=1.0))
 
-        # Otimização DSP: Se o sinal Side for nulo (faixa mono pura), pulamos o processamento estéreo para economizar CPU
+        # Otimização DSP: Se o sinal Side for nulo (faixa mono pura), pulamos o processamento estéreo
         if np.any(side):
             side_processed = board_side(side[np.newaxis, :], sample_rate)[0]
         else:

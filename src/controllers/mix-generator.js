@@ -5,15 +5,27 @@ const path = require('path');
 const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 
-// 🛡️ O Interceptador de Carga: Aceita até 20 faixas simultâneas no campo 'tracks'
+// 🛡️ O Interceptador de Carga
 const upload = multer({ dest: 'uploads/' });
 
 router.post('/generate', upload.array('tracks', 20), (req, res) => {
     try {
-        console.log('💻 [MIX ENGINE] Iniciando cruzamento de faixas da Setlist via API...');
+        console.log('💻 [MIX ENGINE] Iniciando cruzamento ponto-a-ponto via API...');
 
-        const uploadedFiles = req.files; // Array de arquivos que o Angular vai enviar
+        const uploadedFiles = req.files; 
         
+        // 🎛️ CAPTURA MICRO-CIRÚRGICA DOS CROSSFADES
+        let fadeDurations = [];
+        try {
+            if (req.body.crossfades) {
+                fadeDurations = JSON.parse(req.body.crossfades);
+            }
+        } catch (error) {
+            console.error('⚠️ Erro ao interpretar os crossfades customizados. Usando Fail-Safe.', error);
+        }
+        
+        console.log(`[MIX ENGINE] Matriz de Crossfades interceptada: [${fadeDurations.join(', ')}]`);
+
         // Validação de Barramento
         if (!uploadedFiles || uploadedFiles.length === 0) {
             return res.status(400).json({ error: 'Nenhuma faixa foi detectada no barramento de entrada.' });
@@ -27,32 +39,36 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
         if (!fs.existsSync(vignettePath)) {
             console.error('[CRITICAL] VIGNETTE não encontrada.');
-            return res.status(400).json({ error: 'A Vinheta de ID Drop não foi encontrada no servidor.' });
+            return res.status(400).json({ error: 'A Vinheta de ID Drop não foi encontrada.' });
         }
-
-        console.log(`📋 ORDEM DE COMPILAÇÃO: ${uploadedFiles.length} faixas injetadas na linha do tempo.`);
 
         let command = ffmpeg();
 
-        // 1. INJETA A VINHETA NO CANAL 0 (Prioridade Máxima)
+        // 1. Vinheta no Canal 0
         command.input(vignettePath);
 
-        // 2. INJETA AS MÚSICAS TEMPORÁRIAS NOS CANAIS 1 até N
-        // Detalhe sênior: a ordem do array aqui é exatamente a ordem que a General organizar lá no Angular!
+        // 2. Músicas nos Canais de 1 até N
         uploadedFiles.forEach(file => command.input(file.path));
 
         let complexFilter = [];
         let lastOutput = '1:a'; 
 
-        // 3. COSTURA AS MÚSICAS (Crossfade de 0.5s)
+        // 3. COSTURA BISTURI (Crossfade Ponto-a-Ponto)
         if (uploadedFiles.length > 1) {
             for (let i = 2; i <= uploadedFiles.length; i++) {
                 let nextInput = `${i}:a`;
                 let currentOutput = `xfade${i}`;
 
+                // 🛡️ O MOTOR MATEMÁTICO: Puxa o índice exato do Array. (i - 2 porque o loop começa em 2)
+                let currentFadeRaw = fadeDurations[i - 2];
+                // Fail-safe: Se o valor for inválido ou não existir, injeta 8.0
+                let currentFade = (currentFadeRaw !== undefined && currentFadeRaw !== null) ? parseFloat(currentFadeRaw) : 8.0;
+
+                console.log(`⚙️ Injetando transição de ${currentFade}s entre Faixa ${i-1} e Faixa ${i}`);
+
                 complexFilter.push({
                     filter: 'acrossfade',
-                    options: { d: 0.5 },
+                    options: { d: currentFade }, // 💎 O valor correto, seguro e numérico!
                     inputs: [lastOutput, nextInput],
                     outputs: currentOutput
                 });
@@ -61,7 +77,7 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
             }
         }
 
-        // 4. PROTOCOLO DE SOBREPOSIÇÃO DA ORDEM
+        // 4. PROTOCOLO DE SOBREPOSIÇÃO
         complexFilter.push({
             filter: 'adelay',
             options: '2000|2000',
@@ -85,32 +101,26 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
 
         command.complexFilter(complexFilter, 'final_master');
 
-        // Execução do FFmpeg
         command
-            .on('start', () => console.log('⚙️ Compilando Setlist com Assinatura RQS...'))
+            .on('start', () => console.log('⚙️ Compilando Setlist com precisão cirúrgica...'))
             .on('end', () => {
-                console.log('💎 Deploy da Setlist Concluído! Transmitindo a Master para o Front-End.');
-                
+                console.log('💎 Deploy Concluído! Transmitindo...');
                 res.download(outputFile, outputFileName, (err) => {
-                    // Limpeza do HD após o download
                     if (!err && fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
-                    
-                    // 🧹 PROTOCOLO DE LIXEIRO (Gargage Collection Manual)
-                    // Deleta todas as músicas temporárias que o Front-End enviou para não entupir o servidor
                     uploadedFiles.forEach(f => {
                         if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
                     });
                 });
             })
             .on('error', (err) => {
-                console.error('\n🛡️ Falha Crítica no Pipeline FFmpeg:', err.message);
+                console.error('\n🛡️ Falha Crítica no Pipeline:', err.message);
                 if (!res.headersSent) res.status(500).json({ error: 'Falha na renderização da Setlist.' });
             })
             .save(outputFile);
 
     } catch (error) {
-        console.error('[CRITICAL] O Roteador de Mixagem sofreu um colapso:', error);
-        res.status(500).json({ error: 'Erro interno no motor do Mainframe' });
+        console.error('[CRITICAL] Colapso geral:', error);
+        res.status(500).json({ error: 'Erro interno no motor.' });
     }
 });
 
