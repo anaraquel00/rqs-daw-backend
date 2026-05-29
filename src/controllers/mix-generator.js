@@ -77,7 +77,11 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
             }
         }
 
-        // 4. PROTOCOLO DE SOBREPOSIÇÃO
+        // ====================================================================
+        // 4. PROTOCOLO DE SOBREPOSIÇÃO (AUTO-DUCKING DINÂMICO ESTILO RÁDIO FM) [1]
+        // ====================================================================
+        
+        // Atraso de 2 segundos para o início da locução do locutor
         complexFilter.push({
             filter: 'adelay',
             options: '2000|2000',
@@ -85,17 +89,33 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
             outputs: 'vignette_delayed'
         });
 
+        // Ganho de presença na voz da vinheta para cortar a mixagem pesada
         complexFilter.push({
             filter: 'volume',
-            options: '0.8',
+            options: '1.6', // Ganho de +4dB na vinheta para sobressair
+            inputs: 'vignette_delayed',
+            outputs: 'vignette_boosted'
+        });
+
+        // ENVELOPE DE VOLUME DINÂMICO (AUTO-DUCKING) NO CANAL DE MÚSICA [1.2]
+        // Lógica Matemática do Filtro:
+        // - t < 1.5s: Volume total em 100% (1.0)
+        // - t 1.5s a 2.0s: Fade-down suave de 0.5s para 25% (0.25)
+        // - t 2.0s a 17.0s: Mantém em 25% enquanto o locutor de 15s fala
+        // - t 17.0s a 19.0s: Fade-up suave de 2.0s de volta para 100% (1.0)
+        // - t > 19.0s: Mantém em 100% do volume pelo resto de TODA a setlist!
+       complexFilter.push({
+            filter: 'volume',
+            options: "'if(lt(t,1.5),1,if(lt(t,2),1-(t-1.5)*1.5,if(lt(t,17),0.25,if(lt(t,19),0.25+(t-17)*0.375,1))))':eval=frame",
             inputs: lastOutput,
             outputs: 'music_ducked'
         });
 
+        // Mixagem final limpa somando os dois canais processados
         complexFilter.push({
             filter: 'amix',
             options: { inputs: 2, duration: 'longest', normalize: 0 },
-            inputs: ['vignette_delayed', 'music_ducked'],
+            inputs: ['vignette_boosted', 'music_ducked'],
             outputs: 'final_master'
         });
 
