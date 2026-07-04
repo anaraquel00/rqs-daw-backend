@@ -25,15 +25,15 @@ def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.
 
 def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: float):
     """
-    MÓDULO TRANSIENTE: Computa a derivada da amplitude para detectar ataques rápidos (transientes)
-    e aplica um ganho adaptativo pré-compressão para devolver o punch de baterias esmagadas.
+    MÓDULO TRANSIENTE BLINDADO: Se a track for extremamente comprimida e densa (Hard Techno),
+    tentar restaurar transientes gerará distorção digital e estalos. Bypassamos o módulo [1.2].
     """
-    if crest_factor >= 8.5:
-        return signal  # Preserva se a música já tiver dinâmica saudável
+    if crest_factor < 6.5 or crest_factor >= 8.5:
+        return signal  # Bypass protetivo contra distorção em alta densidade [1.2]
         
     abs_signal = np.abs(signal)
     
-    # Envelope rápido via filtro de convolução digital de 5ms
+    # Envelope rápido via convolução digital de 5ms
     window_size = int(0.005 * sample_rate)
     if window_size < 1:
         window_size = 1
@@ -44,13 +44,13 @@ def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: flo
     
     # Derivada do envelope para capturar taxas de subida rápidas (ataques)
     derivative = np.diff(envelope, prepend=0)
-    derivative = np.maximum(0, derivative)  # Foca apenas no ganho dos ataques positivos
+    derivative = np.maximum(0, derivative)  
     
     max_deriv = np.max(derivative) + 1e-9
     normalized_transients = derivative / max_deriv
     
-    # Aplica um ganho adaptativo de até +1.5dB (fator de 1.18) no início dos transientes
-    boost_factor = 1.0 + 0.18 * normalized_transients
+    # Reduzimos o boost máximo de 18% para 10% para evitar sobrecarregar o limitador
+    boost_factor = 1.0 + 0.10 * normalized_transients
     return (signal * boost_factor).astype(np.float32)
 
 def tame_resonances(signal: np.ndarray, sample_rate: float, low_freq: float = 2500.0, high_freq: float = 5000.0):
@@ -124,6 +124,8 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         meter = pyln.Meter(sample_rate)
         initial_lufs = meter.integrated_loudness(audio_data.T)
         
+        # Se a música do Suno 5.5 já vem pré-masterizada e quente (>-14.0 LUFS),
+        # pulamos o ganho de entrada para manter o balanço de dinâmica original!
         if initial_lufs > -14.0:
             pre_gain_value = 0.0
             audio_data = Pedalboard([NoiseGate(threshold_db=-55.0, ratio=2.5, attack_ms=2.0, release_ms=200.0)])(audio_data, sample_rate)
@@ -172,7 +174,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             target_lufs = -8.5 if perfil in ["clear_sky", "aurora"] else -7.0
             comp_threshold_modifier = -2.5   
             ratio_multiplier = 1.35          
-            limiter_ceiling = -1.5           
+            limiter_ceiling = -1.5           # Protege contra distorção de interpolação [1.1.2]
             
         else: # "media"
             target_lufs = -10.5 if perfil in ["clear_sky", "aurora"] else -9.5
@@ -180,13 +182,22 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             ratio_multiplier = 1.0           
             limiter_ceiling = -1.2
 
+        # 🟢 DEFENSA ACÚSTICA (Anti-Distortion Density Shield): 
+        # Se o Crest Factor for menor que 7.5dB, a música já é um tijolo de som (Industrial/Acid/Hardcore).
+        # Aplicamos uma "penalidade de volume" para salvar o limitador final e evitar ruído digital [1.2.6]
+        if crest_factor_db < 7.5:
+            lufs_penalty = 2.0 if crest_factor_db < 6.5 else 1.0
+            target_lufs -= lufs_penalty
+            # Obriga o limitador a atuar com o teto de estúdio mais baixo do Spotify para pistas (-1.8 ou -2.0 dBTP)
+            limiter_ceiling = min(limiter_ceiling, -1.8)
+
         # 7. MATRIZ MID/SIDE E PROCESSADORES DE SINAL INTEGRAIS
         L = audio_data[0, :]
         R = audio_data[1, :]
         mid = ((L + R) * 0.5).astype(np.float32)
         side = ((L - R) * 0.5).astype(np.float32)
         
-        # MÓDULO 1: Restauração dinâmica de transientes no canal central [1.2]
+        # MÓDULO 1: Restauração dinâmica de transientes no canal central (Blindado contra cliques) [1.2]
         mid = restore_transients(mid, crest_factor_db, sample_rate)
         
         # MÓDULO 2: Limpeza de ressonâncias dinâmicas e sibilâncias via STFT [1.1.2]
@@ -211,34 +222,39 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         # 8. COMPRESSÃO MULTIBANDA ULTRA-GENTIL COM DE-ESSER AGRESSIVO NAS ALTAS
         final_ratio = max(1.0, soft_ratio * ratio_multiplier) 
 
+        # Se for alta densidade, o de-esser de agudos entra esmagando qualquer estridência [1.2]
+        high_ratio = max(1.2, final_ratio * 1.6) if crest_factor_db < 7.5 else max(1.2, final_ratio * 1.3)
+
         if perfil == "thunder":
             comp_low = Compressor(threshold_db=rms_low_db - 1.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.1), attack_ms=45.0, release_ms=160.0)
             comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio), attack_ms=25.0, release_ms=150.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.3), attack_ms=1.0, release_ms=30.0)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
             
         elif perfil == "clear_sky" or perfil == "clear sky":
             comp_low = Compressor(threshold_db=rms_low_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.9), attack_ms=50.0, release_ms=200.0)
             comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=30.0, release_ms=180.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.2), attack_ms=1.0, release_ms=30.0)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
             
         elif perfil == "sunroof":
             comp_low = Compressor(threshold_db=rms_low_db - 1.5 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.2), attack_ms=25.0, release_ms=100.0)
             comp_mid = Compressor(threshold_db=rms_mid_db - 1.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.1), attack_ms=15.0, release_ms=120.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.4), attack_ms=1.0, release_ms=30.0)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
             
         elif perfil == "aurora":
             comp_low = Compressor(threshold_db=rms_low_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=40.0, release_ms=250.0)
             comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=25.0, release_ms=220.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.2), attack_ms=1.0, release_ms=30.0)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
 
         mid_low_processed = comp_low(mid_low[np.newaxis, :], sample_rate)[0]
         mid_mid_processed = comp_mid(mid_mid[np.newaxis, :], sample_rate)[0]
         
-        # Filtro de corte cirúrgico contra o aliasing digital inaudível da IA acima de 15.5kHz [1.1.8]
-        # Adiciona atenuador cirúrgico contra a sibilância na frequência de pico de fones como o EDX PRO [1.2.2]
+        # 🟢 VACINA DE AGUDOS: Se a track for muito densa (Industrial), baixamos o corte de agudos para 14.5kHz
+        # para expurgar completamente o "sizzle" sibilante de IA, e atenuamos o bico de agressividade de fones KZ (4.5kHz) [1.1.8, 1.2.2]
+        hf_cutoff = 14500.0 if crest_factor_db < 7.5 else 15500.0
         clean_highs = Pedalboard([
-            LowpassFilter(cutoff_frequency_hz=15500.0),
-            PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.0, q=1.5)
+            LowpassFilter(cutoff_frequency_hz=hf_cutoff),
+            PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5),
+            PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0)
         ])
         mid_high_filtered = clean_highs(mid_high[np.newaxis, :], sample_rate)[0]
         mid_high_processed = comp_high(mid_high_filtered[np.newaxis, :], sample_rate)[0]
@@ -246,8 +262,8 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         # Recombinação
         mid_processed = mid_low_processed + mid_mid_processed + mid_high_processed
 
-        # 9. EQUALIZAÇÃO CORRETIVA SUTIL (Mudanças de milímetros)
-        bass_intensity = rms_low_db - rms_mid_db # 🟢 CORREÇÃO: Variável reinserida com sucesso! [1.2]
+        # 9. EQUALIZAÇÃO CORRETIVA SUTIL (Mudanças de milímetros baseadas no peso real)
+        bass_intensity = rms_low_db - rms_mid_db 
         board_eq_mid = Pedalboard([])
 
         if perfil == "thunder":
@@ -265,9 +281,10 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         mid_processed = board_eq_mid(mid_processed[np.newaxis, :], sample_rate)[0]
 
         # 10. PROCESSAMENTO ESPACIAL (SIDE) SEGURO
+        # Limitamos o agudo das laterais em 13.5kHz para evitar que chiados de fase se espalhem lateralmente [1.2.2]
         board_side = Pedalboard([
             HighpassFilter(cutoff_frequency_hz=150.0),
-            LowpassFilter(cutoff_frequency_hz=14000.0)
+            LowpassFilter(cutoff_frequency_hz=13500.0)
         ])
         
         rms_side_db = get_band_rms_db(side)
