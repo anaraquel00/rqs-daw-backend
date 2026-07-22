@@ -3,7 +3,7 @@ import gc
 import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
-from scipy.signal import butter, sosfiltfilt, stft, istft
+from scipy.signal import butter, sosfiltfilt, lfilter
 from pedalboard import (
     Pedalboard, Compressor, HighpassFilter, HighShelfFilter, 
     LowShelfFilter, Limiter, Gain, Resample, PeakFilter, Distortion, NoiseGate, LowpassFilter
@@ -25,20 +25,21 @@ def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.
 
 def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: float, faccao: str):
     """
-    MÓDULO TRANSIENTE ADAPTATIVO: Restaura a dinâmica baseado na facção da Guerra do Áudio.
+    MÓDULO TRANSIENTE ADAPTATIVO EXTREMAMENTE RÁPIDO:
+    Se a track for ultra-densa e saturada (Hard Techno/Schranz), desativamos o boost
+    para evitar acúmulo de cliques digitais e distorção no limitador [1.2].
     """
-    # Se a track já for esmagada e da Red Team, desativamos para evitar estalos digitais
     if (faccao == "red" and crest_factor < 6.5) or crest_factor >= 8.5:
         return signal
         
     abs_signal = np.abs(signal)
-    window_size = int(0.005 * sample_rate)
-    if window_size < 1:
-        window_size = 1
-    window = np.exp(-np.arange(window_size) / (window_size / 2.0))
-    window /= np.sum(window)
     
-    envelope = np.convolve(abs_signal, window, mode='same')
+    time_constant = 0.005
+    alpha = 1.0 - np.exp(-1.0 / (time_constant * sample_rate))
+    
+    b = [alpha]
+    a = [1.0, -(1.0 - alpha)]
+    envelope = lfilter(b, a, abs_signal)
     
     derivative = np.diff(envelope, prepend=0)
     derivative = np.maximum(0, derivative)  
@@ -46,47 +47,13 @@ def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: flo
     max_deriv = np.max(derivative) + 1e-9
     normalized_transients = derivative / max_deriv
     
-    # Blue Team ganha mais snap (+15% boost). Red Team ganha controle (+8% boost).
     boost_val = 0.15 if faccao == "blue" else 0.08
     boost_factor = 1.0 + boost_val * normalized_transients
     return (signal * boost_factor).astype(np.float32)
 
-def tame_resonances(signal: np.ndarray, sample_rate: float, faccao: str, low_freq: float = 2500.0, high_freq: float = 5000.0):
-    """
-    RESTAURAÇÃO IA: Implementa análise FFT em janelas (STFT) para identificar e atenuar
-    ressonâncias estáticas. A agressividade é moldada pela facção sônica [1.1.2].
-    """
-    nperseg = 2048
-    noverlap = 1536  
-    
-    frequencies, times, Zxx = stft(signal, fs=sample_rate, nperseg=nperseg, noverlap=noverlap)
-    freq_mask = (frequencies >= low_freq) & (frequencies <= high_freq)
-    
-    avg_magnitude = np.mean(np.abs(Zxx), axis=0, keepdims=True)
-    
-    # Red Team é muito sensível a picos de guitarras/synths industriais (atenuação mais firme)
-    threshold_ratio = 3.5 if faccao == "red" else 4.5
-    attenuation_factor = 0.40 if faccao == "red" else 0.60  # -8dB vs -4.5dB de atenuação [1.1.2]
-    
-    Zxx_modified = Zxx.copy()
-    magnitudes = np.abs(Zxx)
-    is_peak = (magnitudes > avg_magnitude * threshold_ratio) & freq_mask[:, np.newaxis]
-    
-    Zxx_modified[is_peak] *= attenuation_factor
-    
-    _, signal_tamed = istft(Zxx_modified, fs=sample_rate, nperseg=nperseg, noverlap=noverlap)
-    
-    if len(signal_tamed) > len(signal):
-        signal_tamed = signal_tamed[:len(signal)]
-    elif len(signal_tamed) < len(signal):
-        signal_tamed = np.pad(signal_tamed, (0, len(signal) - len(signal_tamed)))
-        
-    return signal_tamed.astype(np.float32)
-
 def saturate_side(side_channel: np.ndarray, sample_rate: float):
     """
-    SATURAÇÃO HARMÔNICA: Aplica funções de transferência não-lineares (tanh) sutilmente 
-    apenas nas altas frequências do canal Side para gerar brilho estéreo de fita analógica.
+    SATURAÇÃO HARMÔNICA: Saturação suave não-linear (tangente hiperbólica).
     """
     sos_hp = butter(2, 5000.0, btype='high', fs=sample_rate, output='sos')
     side_highs = sosfiltfilt(sos_hp, side_channel)
@@ -98,8 +65,23 @@ def saturate_side(side_channel: np.ndarray, sample_rate: float):
 
 def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False):
     try:
-        # 1. LEITURA BLINDADA E OTIMIZADA DE ÁUDIO
-        audio_data, sample_rate = sf.read(input_path, dtype='float32')
+        # 1. LEITURA SELETIVA E ULTRA-RÁPIDA (ZLP - Zero Latency Preview) [1]
+        if is_preview:
+            info = sf.info(input_path) 
+            sample_rate = info.samplerate
+            total_frames = info.frames
+            
+            preview_frames = int(15.0 * sample_rate)
+            
+            if total_frames > preview_frames:
+                start_frame = int(total_frames / 2) - int(preview_frames / 2)
+            else:
+                start_frame = 0
+                preview_frames = total_frames
+                
+            audio_data, sample_rate = sf.read(input_path, start=start_frame, frames=preview_frames, dtype='float32')
+        else:
+            audio_data, sample_rate = sf.read(input_path, dtype='float32')
         
         if audio_data.ndim == 1:
             audio_data = np.column_stack((audio_data, audio_data))
@@ -109,7 +91,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             
         audio_data = audio_data.T
 
-        # 2. ANÁLISE INICIAL DE LOUDNESS (Suno 5.5 Safe Normalization)
+        # 2. ANÁLISE INICIAL DE LOUDNESS
         meter = pyln.Meter(sample_rate)
         initial_lufs = meter.integrated_loudness(audio_data.T)
         
@@ -125,16 +107,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             ])
             audio_data = gate_and_norm(audio_data, sample_rate)
 
-        # 3. MOTOR DE PREVIEW (Corte de 15s)
-        if is_preview:
-            total_samples = audio_data.shape[1]
-            total_duration_sec = total_samples / sample_rate
-            if total_duration_sec > 15.0:
-                start_sec = (total_duration_sec / 2.0) - 7.5
-                end_sec = start_sec + 15.0
-                audio_data = audio_data[:, int(start_sec * sample_rate):int(end_sec * sample_rate)]
-
-        # 4. ANÁLISE ADAPTATIVA DSP DE CONTROLE DE PICO
+        # 3. ANÁLISE ADAPTATIVA DSP DE CONTROLE DE PICO
         input_lufs = meter.integrated_loudness(audio_data.T)
         rms = np.sqrt(np.mean(audio_data**2))
         peak = np.max(np.abs(audio_data))
@@ -143,63 +116,59 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         # Ratios de segurança para o Suno 5.5
         soft_ratio = 1.15 if crest_factor_db < 8.0 else 1.25
 
-        # 5. MAPEAMENTO DE PERFIS E DECLARAÇÃO DE FACÇÕES SÔNICAS (AUDIO CIVIL WAR)
+        # 4. MAPEAMENTO DE PERFIS E DECLARAÇÃO DE FACÇÕES SÔNICAS (AUDIO CIVIL WAR) [1]
         perfil = estilo.lower().strip()
         if perfil not in ["thunder", "clear_sky", "clear sky", "sunroof", "aurora"]:
             perfil = "clear_sky"
 
-        # Divide as tracks de forma binária entre as facções da Guerra do Áudio [1]
-        if perfil in ["clear_sky", "clear sky", "aurora"]:
-            faccao = "blue"
-            print(f"[RQS FACTION] Blue Team ativa. Masterização elegante voltada para dinâmica e espaço.")
-        else:
-            faccao = "red"
-            print(f"[RQS FACTION] Red Team ativa. Masterização agressiva voltada para densidade e impacto.")
+        faccao = "blue" if perfil in ["clear_sky", "clear sky", "aurora"] else "red"
 
-        # 6. MATRIZ DE INTENSIDADE ESTILO MIXEA (DINÂMICA E VOLUME)
+        # 5. MATRIZ DE INTENSIDADE ESTILO MIXEA ADAPTADA ÀS FACÇÕES (DINÂMICA E VOLUME) [1.2.6]
         int_level = intensidade.lower().strip()
 
         if int_level == "baixa":
-            # Blue Team foca em dinâmica suave. Red Team foca em peso controlado. [1.2.6]
-            target_lufs = -12.5 if faccao == "blue" else -11.0
+            # Baixa intensidade: Foco total em transparência acústica e dinâmica livre (Sem distorção)
+            target_lufs = -12.5 if faccao == "blue" else -11.5
             comp_threshold_modifier = 1.0    
-            ratio_multiplier = 0.8           
+            ratio_multiplier = 0.75          # Suaviza a compressão multibanda ao mínimo
             limiter_ceiling = -1.0           
+            limiter_release = 150.0          # Release lento impede o limiter de clipar o subgrave! [1.1.2]
             
         elif int_level == "alta":
-            # Blue Team foca em presença comercial. Red Team foca em esmagamento máximo de festival. [1.2.6]
-            target_lufs = -8.5 if faccao == "blue" else -7.0
-            comp_threshold_modifier = -2.5   
-            ratio_multiplier = 1.35          
-            # Red Team ganha teto estrito em alta intensidade para prevenir distorção interamostra [1.1.2]
-            limiter_ceiling = -1.0 if faccao == "blue" else -1.8
+            # Alta intensidade: Volume competitivo comercial de festival.
+            target_lufs = -8.5 if faccao == "blue" else -8.0  
+            comp_threshold_modifier = -2.0   
+            ratio_multiplier = 1.25          
+            # Red Team ganha teto estrito de segurança em alta intensidade para prevenir distorção interamostra [1.1.2]
+            limiter_ceiling = -1.0 if faccao == "blue" else -2.0  
+            limiter_release = 80.0           
             
         else: # "media"
+            # Média intensidade: O ponto de equilíbrio ideal.
             target_lufs = -10.5 if faccao == "blue" else -9.5
             comp_threshold_modifier = -0.5   
             ratio_multiplier = 1.0           
-            limiter_ceiling = -1.2
+            limiter_ceiling = -1.2 if faccao == "blue" else -1.5
+            limiter_release = 120.0          
 
-        # 🛡️ DEFESA ACÚSTICA (Anti-Distortion Density Shield): 
-        # Se for um arquivo Red Team e já for ultra-comprimido, aplicamos o recuo preventivo [1.2.6]
+        # 🟢 DEFENSA ACÚSTICA ADICIONAL (Anti-Distortion Density Shield): 
+        # Se for um arquivo Red Team (Industrial/Techno) e já for ultra-comprimido,
+        # aplicamos uma penalidade para impedir o esmagamento no limitador [1.2.6].
         if faccao == "red" and crest_factor_db < 7.5:
-            lufs_penalty = 2.0 if crest_factor_db < 6.5 else 1.0
+            lufs_penalty = 1.5 if crest_factor_db < 6.5 else 0.5
             target_lufs -= lufs_penalty
-            limiter_ceiling = min(limiter_ceiling, -2.0 if crest_factor_db < 6.5 else -1.8)
+            # Obriga o limitador a atuar com o teto de estúdio mais baixo para segurança física contra distorção
+            limiter_ceiling = min(limiter_ceiling, -2.0)
+            # Desacelera o release do limiter para proteger o subgrave de ciclagens rápidas
+            limiter_release = max(limiter_release, 150.0)
 
-        # 7. MATRIZ MID/SIDE E PROCESSADORES DE SINAL INTEGRAIS
+        # 6. MATRIZ MID/SIDE E PROCESSADORES DE SINAL INTEGRAIS
         L = audio_data[0, :]
         R = audio_data[1, :]
         mid = ((L + R) * 0.5).astype(np.float32)
         side = ((L - R) * 0.5).astype(np.float32)
         
-        # MÓDULO 1: Restauração de transientes adaptada à facção sônica [1.2]
         mid = restore_transients(mid, crest_factor_db, sample_rate, faccao)
-        
-        # MÓDULO 2: Tame de ressonâncias dinâmicas via STFT baseada em facção [1.1.2]
-        mid = tame_resonances(mid, sample_rate, faccao)
-        
-        # MÓDULO 3: Saturação harmônica não-linear no canal lateral estéreo [1.2]
         side = saturate_side(side, sample_rate)
         
         hp_mid = Pedalboard([HighpassFilter(cutoff_frequency_hz=30)])
@@ -215,51 +184,71 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         rms_mid_db = get_band_rms_db(mid_mid)
         rms_high_db = get_band_rms_db(mid_high)
 
-        # 8. COMPRESSÃO MULTIBANDA ADAPTADA À GUERRA ACÚSTICA
+        # 7. COMPRESSÃO MULTIBANDA ADAPTADA À GUERRA ACÚSTICA (E REDUÇÃO DE TIMING PARA 140BPM+) [1.2]
         final_ratio = max(1.0, soft_ratio * ratio_multiplier) 
 
-        # Red Team ganha compressão de agudos mais esmagadora (De-esser) para segurar guitarras e batidas brutas
-        high_ratio = max(1.2, final_ratio * 1.6) if faccao == "red" else max(1.2, final_ratio * 1.2)
+        # Se for um arquivo Red Team de alta densidade (Schranz/Techno), 
+        # o release dos compressores cai de 160ms para 45ms! Isso sincroniza as batidas a 140+ BPM [1.2].
+        if faccao == "red" and crest_factor_db < 7.5:
+            low_release = 45.0
+            mid_release = 50.0
+            high_release = 20.0
+            high_ratio = max(1.2, final_ratio * 1.8) # Esmaga as sibilâncias industriais
+        else:
+            low_release = 160.0
+            mid_release = 150.0
+            high_release = 30.0
+            high_ratio = max(1.2, final_ratio * 1.2)
 
         if perfil == "thunder":
-            comp_low = Compressor(threshold_db=rms_low_db - 1.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.1), attack_ms=45.0, release_ms=160.0)
-            comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio), attack_ms=25.0, release_ms=150.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
+            comp_low = Compressor(threshold_db=rms_low_db - 1.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.1), attack_ms=45.0, release_ms=low_release)
+            comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio), attack_ms=25.0, release_ms=mid_release)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=high_release)
             
         elif perfil == "clear_sky" or perfil == "clear sky":
-            comp_low = Compressor(threshold_db=rms_low_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.9), attack_ms=50.0, release_ms=200.0)
-            comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=30.0, release_ms=180.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
+            comp_low = Compressor(threshold_db=rms_low_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.9), attack_ms=50.0, release_ms=low_release)
+            comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=30.0, release_ms=mid_release)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=high_release)
             
         elif perfil == "sunroof":
-            comp_low = Compressor(threshold_db=rms_low_db - 1.5 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.2), attack_ms=25.0, release_ms=100.0)
-            comp_mid = Compressor(threshold_db=rms_mid_db - 1.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.1), attack_ms=15.0, release_ms=120.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
+            comp_low = Compressor(threshold_db=rms_low_db - 1.5 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.2), attack_ms=25.0, release_ms=low_release)
+            comp_mid = Compressor(threshold_db=rms_mid_db - 1.0 + comp_threshold_modifier, ratio=max(1.0, final_ratio * 1.1), attack_ms=15.0, release_ms=mid_release)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=high_release)
             
         elif perfil == "aurora":
-            comp_low = Compressor(threshold_db=rms_low_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=40.0, release_ms=250.0)
-            comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=25.0, release_ms=220.0)
-            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=30.0)
+            comp_low = Compressor(threshold_db=rms_low_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=40.0, release_ms=low_release)
+            comp_mid = Compressor(threshold_db=rms_mid_db + comp_threshold_modifier, ratio=max(1.0, final_ratio * 0.8), attack_ms=25.0, release_ms=mid_release)
+            comp_high = Compressor(threshold_db=rms_high_db - 3.0 + comp_threshold_modifier, ratio=high_ratio, attack_ms=1.0, release_ms=high_release)
 
         mid_low_processed = comp_low(mid_low[np.newaxis, :], sample_rate)[0]
         mid_mid_processed = comp_mid(mid_mid[np.newaxis, :], sample_rate)[0]
         
-        # 🟢 VACINA DE AGUDOS ADAPTATIVA: 
-        # Red Team corta agudos acima de 14.5kHz (Hard Techno/Metal/Aggrotech) para expurgar sibilâncias.
-        # Blue Team mantém agudos superiores até 15.5kHz preservando ar e brilho transparente [1.1.8].
-        hf_cutoff = 14500.0 if faccao == "red" else 15500.0
-        clean_highs = Pedalboard([
-            LowpassFilter(cutoff_frequency_hz=hf_cutoff),
-            PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5),
-            PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0)
-        ])
+        # 🟢 VACINA DE AGUDOS ADAPTATIVA (EDX Pro Sibilance Shield):
+        # Red Team corta agudos acima de 14.5kHz (Industrial/Acid/Hardcore) para expurgar sibilâncias.
+        # Blue Team mantém agudos superiores saudáveis até 15.5kHz para brilho elegante [1.1.8, 1.2.2].
+        if faccao == "red" and crest_factor_db < 7.5:
+            hf_cutoff = 13800.0  # Limpa o teto de ruído digital de alta tensão da IA [1.1.8]
+            clean_highs = Pedalboard([
+                LowpassFilter(cutoff_frequency_hz=hf_cutoff),
+                PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0), # LED de estridência do EDX [1.2.2]
+                PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5), # LED de sibilância [1.2.2]
+                PeakFilter(cutoff_frequency_hz=8000.0, gain_db=-1.5, q=1.0)
+            ])
+        else:
+            hf_cutoff = 15500.0
+            clean_highs = Pedalboard([
+                LowpassFilter(cutoff_frequency_hz=hf_cutoff),
+                PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.0, q=1.5),
+                PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.0, q=2.0)
+            ])
+            
         mid_high_filtered = clean_highs(mid_high[np.newaxis, :], sample_rate)[0]
         mid_high_processed = comp_high(mid_high_filtered[np.newaxis, :], sample_rate)[0]
 
         # Recombinação
         mid_processed = mid_low_processed + mid_mid_processed + mid_high_processed
 
-        # 9. EQUALIZAÇÃO CORRETIVA SUTIL (Pinceladas leves baseadas no peso de graves)
+        # 8. EQUALIZAÇÃO CORRETIVA SUTIL (Pinceladas leves baseadas no peso de graves)
         bass_intensity = rms_low_db - rms_mid_db 
         board_eq_mid = Pedalboard([])
 
@@ -277,7 +266,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
 
         mid_processed = board_eq_mid(mid_processed[np.newaxis, :], sample_rate)[0]
 
-        # 10. PROCESSAMENTO ESPACIAL (SIDE) SEGURO
+        # 9. PROCESSAMENTO ESPACIAL (SIDE) SEGURO
         # Blue Team mantém o estéreo amplo. Red Team blinda as laterais contra chiados de fase em 13.5kHz [1.2.2].
         board_side = Pedalboard([
             HighpassFilter(cutoff_frequency_hz=150.0),
@@ -285,19 +274,20 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         ])
         
         rms_side_db = get_band_rms_db(side)
-        side_comp = Compressor(threshold_db=max(-40.0, rms_side_db - 4.0), ratio=max(1.0, final_ratio * 0.8), attack_ms=30.0, release_ms=150.0)
-        board_side.append(side_comp)
         
-        if perfil == "thunder":
-            board_side.append(Gain(gain_db=0.4))
-        elif perfil == "clear_sky" or perfil == "clear sky":
-            board_side.append(Gain(gain_db=0.6))
-        elif perfil == "sunroof":
-            board_side.append(Gain(gain_db=0.8)) 
-            board_side.append(PeakFilter(cutoff_frequency_hz=1500.0, gain_db=0.5, q=0.6))
-        elif perfil == "aurora":
-            board_side.append(Gain(gain_db=0.6))
-            board_side.append(HighShelfFilter(cutoff_frequency_hz=5000.0, gain_db=0.8)) 
+        # Desativa a compressão dinâmica no Side se for track industrial de alta densidade
+        # para evitar que o "sopro/chiado de fase" do Suno seja amplificado nas laterais [1.2.2]
+        if faccao == "red" and crest_factor_db < 7.5:
+            board_side.append(Gain(gain_db=0.2)) # Apenas uma abertura estática sutil e limpa
+        else:
+            side_comp = Compressor(threshold_db=max(-40.0, rms_side_db - 4.0), ratio=max(1.0, final_ratio * 0.8), attack_ms=30.0, release_ms=150.0)
+            board_side.append(side_comp)
+            
+            if perfil == "clear_sky" or perfil == "clear sky":
+                board_side.append(Gain(gain_db=0.6))
+            elif perfil == "aurora":
+                board_side.append(Gain(gain_db=0.6))
+                board_side.append(HighShelfFilter(cutoff_frequency_hz=5000.0, gain_db=0.8)) 
 
         if np.any(side):
             side_processed = board_side(side[np.newaxis, :], sample_rate)[0]
@@ -328,7 +318,8 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         board_master = Pedalboard([
             Resample(target_sample_rate=oversampled_rate),
             Gain(gain_db=gain_needed),
-            Limiter(threshold_db=limiter_ceiling, release_ms=50.0), 
+            # 🟢 CORREÇÃO: O release_ms do Limiter agora é dinâmico (limiter_release) para proteger o subgrave de clipar! [1.1.2]
+            Limiter(threshold_db=limiter_ceiling, release_ms=limiter_release), 
             Resample(target_sample_rate=sample_rate)
         ])
 
