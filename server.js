@@ -6,7 +6,7 @@ const app = express();
 app.use(cors({
     origin: ['http://localhost:4200', 
         'https://rqs-daw-frontend.vercel.app', 
-        'https://studio.raquelsynths.com.br'],
+        'https://studio.raquelsynths.com'],
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
         
