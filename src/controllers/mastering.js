@@ -8,25 +8,25 @@ const fs = require('fs');
 // 🛡️ Ajustado para o diretório temporário obrigatório da AWS Lambda (/tmp)
 const upload = multer({ dest: '/tmp/' });
 
-router.post('/process', upload.single('audio'), (req, res) => {
+router.post('/process', upload.any(), (req, res) => {
     try {
         console.log('[DSP ENGINE] Arquivo recebido. Acionando módulo Python...');
         
-        if (!req.file) {
+        // Pega o primeiro arquivo enviado, independentemente do nome do campo no FormData
+        const uploadedFile = req.files && req.files.length > 0 ? req.files[0] : null;
+
+        if (!uploadedFile) {
+            console.error('[CRITICAL] Nenhum arquivo encontrado no request.');
             return res.status(400).json({ error: 'Nenhum arquivo de áudio enviado.' });
         }
 
         const estilo = req.body.estilo || 'equilibrado';
         const intensidade = req.body.intensidade || 'media';
-        const inputPath = req.file.path;
-        
-        // 🛡️ Salvando o arquivo de saída também em /tmp/ para evitar erro de permissão na AWS
-        const outputPath = path.join('/tmp', `masterized_${req.file.filename}.wav`);
+        const inputPath = uploadedFile.path;
+        const outputPath = path.join('/tmp', `masterized_${uploadedFile.filename}.wav`);
         const pythonScriptPath = path.join(__dirname, 'core_dsp.py');
-
         const isPreview = req.body.preview === 'true' ? 'true' : 'false';
 
-        // Na AWS Lambda / Docker, usamos python3 direto
         const pythonCommand = 'python3';
 
         const pythonProcess = spawn(pythonCommand, [
@@ -55,8 +55,8 @@ router.post('/process', upload.single('audio'), (req, res) => {
         });
 
         pythonProcess.stderr.on('data', (data) => {
-    console.error(`[PYTHON CRASH LOG]: ${data.toString()}`);
-   });
+            console.error(`[PYTHON LOG] ${data.toString()}`);
+        });
 
     } catch (error) {
         console.error('[CRITICAL] Falha no roteador de DSP:', error);
