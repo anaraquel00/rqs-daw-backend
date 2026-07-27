@@ -26,8 +26,8 @@ app.use('/api/v1/video', videoRouter);
 app.use('/api/v1/stems', stemsRouter);
 
 // 🚀 Boot do Sistema
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`[RQS MAINFRAME] Sistema unificado online na porta ${PORT}`);
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`RQS DSP Core rodando na porta ${PORT}`);
     console.log(`[RQS MAINFRAME] Módulos operacionais: [DSP] [MIXER] [VIDEO] [STEMS]`);
 });

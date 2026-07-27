@@ -26,10 +26,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 7. Libera a porta de comunicação
-EXPOSE 3000
+EXPOSE 8080
+
+ENV PORT=8080
 
 # 8. O Comando de Ignição Definitivo (Node estrangulado em 80MB de RAM máxima)
 CMD ["node", "--max-old-space-size=80", "server.js"]
 
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1 /lambda-adapter /opt/extensions/lambda-adapter
-
