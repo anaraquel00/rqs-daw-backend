@@ -5,31 +5,37 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const upload = multer({ dest: 'uploads/' });
+// 🛡️ Ajustado para o diretório temporário obrigatório da AWS Lambda (/tmp)
+const upload = multer({ dest: '/tmp/' });
 
 router.post('/process', upload.single('audio'), (req, res) => {
     try {
         console.log('[DSP ENGINE] Arquivo recebido. Acionando módulo Python...');
         
+        if (!req.file) {
+            return res.status(400).json({ error: 'Nenhum arquivo de áudio enviado.' });
+        }
+
         const estilo = req.body.estilo || 'equilibrado';
         const intensidade = req.body.intensidade || 'media';
         const inputPath = req.file.path;
-        const outputPath = path.join(__dirname, '../../uploads', `masterized_${req.file.filename}.wav`);
+        
+        // 🛡️ Salvando o arquivo de saída também em /tmp/ para evitar erro de permissão na AWS
+        const outputPath = path.join('/tmp', `masterized_${req.file.filename}.wav`);
         const pythonScriptPath = path.join(__dirname, 'core_dsp.py');
 
-       // O frontend envia req.body.preview = 'true' para testar, ou 'false' para masterizar a valer.
         const isPreview = req.body.preview === 'true' ? 'true' : 'false';
 
-     // 🛡️ O Câmbio Automático: Se estiver na nuvem (usa a porta da Railway), roda o Python global. Se for no seu Acer, usa a venv.
-        const pythonCommand = process.env.PORT ? 'python3' : './venv/bin/python3';
+        // Na AWS Lambda / Docker, usamos python3 direto
+        const pythonCommand = 'python3';
 
         const pythonProcess = spawn(pythonCommand, [
-        pythonScriptPath, 
-        inputPath, 
-        outputPath, 
-        estilo, 
-        intensidade,
-        isPreview 
+            pythonScriptPath, 
+            inputPath, 
+            outputPath, 
+            estilo, 
+            intensidade,
+            isPreview 
         ]);
 
         pythonProcess.stdout.on('data', (data) => {
@@ -38,9 +44,7 @@ router.post('/process', upload.single('audio'), (req, res) => {
                 const logs = output.split('|');
                 console.log(`[DSP ENGINE] Masterização concluída. Ganho: ${logs[1]}dB`);
                 
-                // Retorna o arquivo de áudio final para o Front-End
                 res.download(outputPath, 'rqs_master.wav', () => {
-                    // Limpeza de cache tática: deleta os temporários após o envio
                     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                 });
