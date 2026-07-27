@@ -30,3 +30,6 @@ EXPOSE 3000
 
 # 8. O Comando de Ignição Definitivo (Node estrangulado em 80MB de RAM máxima)
 CMD ["node", "--max-old-space-size=80", "server.js"]
+
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1 /lambda-adapter /opt/extensions/lambda-adapter
+
