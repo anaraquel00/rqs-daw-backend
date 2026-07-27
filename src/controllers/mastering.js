@@ -54,9 +54,14 @@ router.post('/process', upload.any(), (req, res) => {
             }
         });
 
-        pythonProcess.stderr.on('data', (data) => {
-            console.error(`[PYTHON LOG] ${data.toString()}`);
-        });
+        pythonProcess.on('error', (err) => {
+    console.error(`[CRITICAL] Falha ao iniciar o processo Python: ${err.message}`);
+    return res.status(500).json({ error: 'Erro crítico ao iniciar motor DSP' });
+    });
+
+pythonProcess.stderr.on('data', (data) => {
+    console.error(`[PYTHON LOG ERROR]: ${data.toString()}`);
+     });
 
     } catch (error) {
         console.error('[CRITICAL] Falha no roteador de DSP:', error);
