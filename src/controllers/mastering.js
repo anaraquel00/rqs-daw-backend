@@ -55,8 +55,8 @@ router.post('/process', upload.single('audio'), (req, res) => {
         });
 
         pythonProcess.stderr.on('data', (data) => {
-            console.error(`[PYTHON LOG] ${data.toString()}`);
-        });
+    console.error(`[PYTHON CRASH LOG]: ${data.toString()}`);
+   });
 
     } catch (error) {
         console.error('[CRITICAL] Falha no roteador de DSP:', error);
