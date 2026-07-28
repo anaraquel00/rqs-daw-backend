@@ -9,7 +9,10 @@ const fs = require('fs');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
-const s3Client = new S3Client({ region: "sa-east-1" }); // 🟢 Mapeado para São Paulo
+const s3Client = new S3Client({ 
+    region: "sa-east-1",
+    requestChecksumCalculation: "WHEN_REQUIRED"
+});
 const BUCKET_NAME = "amzn-rqs-bunker-sa";               // 🟢 Novo bucket de SP
 
 // Configuração do Multer em disco efêmero para arquivos pequenos de teste (Previews) [1.1.2]
@@ -34,7 +37,7 @@ router.get('/presigned-url', async (req, res) => {
         const command = new PutObjectCommand({
             Bucket: BUCKET_NAME,
             Key: s3Key,
-            ContentType: "audio/wav"
+            //ContentType: "audio/wav"
         });
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 });
@@ -119,7 +122,7 @@ router.post('/process', upload.any(), async (req, res) => {
                     Bucket: BUCKET_NAME,
                     Key: masterS3Key,
                     Body: fileBuffer,
-                    ContentType: "audio/wav"
+                    //ContentType: "audio/wav"
                 });
 
                 try {
