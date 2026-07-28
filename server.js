@@ -2,7 +2,14 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 
-// 1. Configuração do Objeto de CORS
+// 🟢 PROTEÇÃO SRE ULTRA-RESILIENTE (Normalizador de Barras Duplas)
+// Reescreve qualquer chamada errônea do frontend de '//mastering' para '/mastering' [1]
+app.use((req, res, next) => {
+    req.url = req.url.replace(/\/\/+/g, '/');
+    next();
+});
+
+// Configuração do Objeto de CORS
 const corsOptions = {
     origin: [
         'http://localhost:4200', 
@@ -35,7 +42,7 @@ const mixRouter = require('./src/controllers/mix-generator');
 const videoRouter = require('./src/controllers/video-engine');
 const stemsRouter = require('./src/controllers/stem-splitter');
 
-// 🟢 CORREÇÃO: Removemos o /api/v1 para as rotas baterem com a sua Vercel de primeira! [1]
+// Endpoints sintonizados com o frontend
 app.use('/mastering', masteringRouter);
 app.use('/mix', mixRouter);
 app.use('/video', videoRouter);
