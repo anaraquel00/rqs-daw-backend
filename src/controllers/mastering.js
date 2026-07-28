@@ -5,12 +5,12 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// 🟢 MÓDULO S3: Importação dos SDKs oficiais da AWS para bypassar o limite de 6MB do gateway [1.2.6]
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+// 🟢 MÓDULO S3: Importação dos SDKs oficiais da AWS (Instalados de forma blindada pela sua Dockerfile) [1.2.6]
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
-// Inicializa o cliente do S3 mapeado para o seu data center na AWS
 const s3Client = new S3Client({ region: "us-east-1" });
+const BUCKET_NAME = "amzn-rqs-bunker"; // ⚠️ Substitua pelo nome real do seu Bucket S3
 
 // Configuração do Multer em disco efêmero para arquivos pequenos de teste (Previews) [1.1.2]
 const storage = multer.diskStorage({
@@ -20,8 +20,8 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // ============================================================================
-// ROTA 1 (NOVA): GET /api/v1/mastering/presigned-url
-// Permite que o Angular envie faixas WAV gigantes de 100MB direto para o S3 [1.2.6]
+// ROTA 1: GET /api/v1/mastering/presigned-url
+// Solicita o link de upload seguro direto para o S3 (Bypass de 6MB) [1.2.6]
 // ============================================================================
 router.get('/presigned-url', async (req, res) => {
     try {
@@ -31,18 +31,13 @@ router.get('/presigned-url', async (req, res) => {
         }
 
         const s3Key = `uploads/${Date.now()}_${fileName}`;
-
-        // Cria a ordem de upload seguro para o bucket S3
         const command = new PutObjectCommand({
-            Bucket: "seu-bucket-de-audio-rqs", // ⚠️ Substitua pelo nome do seu Bucket real criado no console S3
+            Bucket: BUCKET_NAME,
             Key: s3Key,
             ContentType: "audio/wav"
         });
 
-        // Gera a URL pré-assinada válida por 15 minutos (900 segundos) [1]
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 });
-
-        // Retorna a URL de upload direto e a chave do arquivo para o Angular salvar
         res.status(200).json({ uploadUrl, s3Key });
     } catch (error) {
         console.error("Erro ao gerar presigned URL no S3:", error);
@@ -51,22 +46,44 @@ router.get('/presigned-url', async (req, res) => {
 });
 
 // ============================================================================
-// ROTA 2: POST /api/v1/mastering/process
-// O seu reator de processamento masterizador principal
+// ROTA 2: POST /api/v1/mastering/process (Híbrida e Resiliente)
 // ============================================================================
-router.post('/process', upload.any(), (req, res) => {
+router.post('/process', upload.any(), async (req, res) => {
     try {
         console.log('[DSP ENGINE] Requisição HTTP recebida na AWS Lambda.');
         
+        let inputPath = '';
         const uploadedFile = req.files && req.files.length > 0 ? req.files[0] : null;
+        const s3Key = req.body.s3Key;
 
-        if (!uploadedFile) {
-            console.error('[CRITICAL] Nenhum arquivo binário encontrado no payload.');
-            return res.status(400).json({ error: 'Nenhum arquivo de áudio enviado.' });
+        // CASO A: Upload comum direto (ideal para arquivos pequenos/previews) [1.1.2]
+        if (uploadedFile) {
+            inputPath = uploadedFile.path;
+            console.log(`[DSP ENGINE] Processando via upload direto: ${inputPath}`);
+        } 
+        // CASO B: Upload via S3 (Bypass de 6MB para arquivos de grande porte) [1.2.6]
+        else if (s3Key) {
+            console.log(`[S3 PIPELINE] Baixando arquivo do S3 para o /tmp: ${s3Key}`);
+            inputPath = path.join('/tmp', `input_${Date.now()}.wav`);
+            
+            const downloadCommand = new GetObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: s3Key
+            });
+            const s3Response = await s3Client.send(downloadCommand);
+            
+            // Grava o stream de áudio do S3 direto no /tmp em alta velocidade
+            const fileStream = fs.createWriteStream(inputPath);
+            await new Promise((resolve, reject) => {
+                s3Response.Body.pipe(fileStream);
+                s3Response.Body.on("error", reject);
+                fileStream.on("finish", resolve);
+            });
+            console.log('[S3 PIPELINE] Áudio baixado no disco efêmero com sucesso!');
+        } else {
+            console.error('[CRITICAL] Nenhum arquivo ou chave S3 encontrada no payload.');
+            return res.status(400).json({ error: 'Nenhum áudio recebido.' });
         }
-
-        // O arquivo já foi gravado de forma segura no /tmp diretamente pelo Multer! [1.1.2]
-        const inputPath = uploadedFile.path;
 
         const estilo = req.body.estilo || 'clear_sky';
         const intensidade = req.body.intensidade || 'media';
@@ -76,7 +93,6 @@ router.post('/process', upload.any(), (req, res) => {
 
         console.log(`[DSP ENGINE] Acionando Python para estilo: ${estilo}, intensidade: ${intensidade}, preview: ${isPreview}`);
 
-        // Invoca o Python com o interpretador absoluto do venv do contêiner Docker
         const venvPython = '/opt/venv/bin/python3';
         const pythonProcess = spawn(venvPython, [
             pythonScriptPath, 
@@ -96,7 +112,6 @@ router.post('/process', upload.any(), (req, res) => {
                 console.log(`[DSP ENGINE] Masterização concluída com sucesso!`);
                 
                 res.download(outputPath, 'rqs_master.wav', () => {
-                    // Limpeza pós-transmissão bem sucedida [1]
                     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                 });
