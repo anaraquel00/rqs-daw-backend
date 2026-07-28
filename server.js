@@ -19,8 +19,8 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // 🟢 AJUSTE SRE 2: Expande os limites de payload JSON para trafegar dados pesados sem travar [1.1.2]
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '80mb' }));
+app.use(express.urlencoded({ limit: '80mb', extended: true }));
 
 // 🟢 AJUSTE SRE 3: Endpoint de Aquecimento (Warm-up / Health Check)
 // Chame essa rota via Angular assim que studio.raquelsynths.com carregar na tela! [1.1.1]

@@ -6,7 +6,7 @@ const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 
 // 🛡️ O Interceptador de Carga
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: '/tmp/' });
 
 router.post('/generate', upload.array('tracks', 20), (req, res) => {
     try {
