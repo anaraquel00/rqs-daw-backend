@@ -34,10 +34,22 @@ router.get('/presigned-url', async (req, res) => {
         }
 
         const s3Key = `uploads/${Date.now()}_${fileName}`;
+        
+        // 🟢 Adiciona o ContentType dinâmico para garantir a assinatura correta no S3 [1.2.7]
+        const fileExtension = path.extname(fileName).toLowerCase();
+        let contentType;
+        if (fileExtension === '.wav') {
+            contentType = 'audio/wav';
+        } else if (fileExtension === '.mp3') {
+            contentType = 'audio/mpeg';
+        } else {
+            return res.status(400).json({ error: "Tipo de arquivo não suportado. Use .wav ou .mp3" });
+        }
+
         const command = new PutObjectCommand({
             Bucket: BUCKET_NAME,
             Key: s3Key,
-            //ContentType: "audio/wav"
+            ContentType: contentType
         });
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 });
