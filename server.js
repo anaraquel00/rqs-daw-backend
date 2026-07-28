@@ -9,22 +9,19 @@ const corsOptions = {
         'https://rqs-daw-frontend.vercel.app', 
         'https://studio.raquelsynths.com'
     ],
-    methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 };
 
 app.use(cors(corsOptions));
 
-// 🟢 AJUSTE SRE 1: Garante aprovação imediata de preflight em qualquer rota [1]
+// Garante aprovação imediata de preflight em qualquer rota no Express 5
 app.options(/.*/, cors(corsOptions));
 
-// 🟢 AJUSTE SRE 2: Expande os limites de payload JSON para trafegar dados pesados sem travar [1.1.2]
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// 🟢 AJUSTE SRE 3: Endpoint de Aquecimento (Warm-up / Health Check)
-// Chame essa rota via Angular assim que studio.raquelsynths.com carregar na tela! [1.1.1]
-app.get('/api/v1/health', (req, res) => {
+// Rota de Aquecimento (Bypass do /api/v1)
+app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'UP',
         mainframe: 'RQS-DAW Core Active',
@@ -38,13 +35,13 @@ const mixRouter = require('./src/controllers/mix-generator');
 const videoRouter = require('./src/controllers/video-engine');
 const stemsRouter = require('./src/controllers/stem-splitter');
 
-// 🛤️ Acoplando as Rotas (A Mágica da Unificação)
-app.use('/api/v1/mastering', masteringRouter);
-app.use('/api/v1/mix', mixRouter);
-app.use('/api/v1/video', videoRouter);
-app.use('/api/v1/stems', stemsRouter);
+// 🟢 CORREÇÃO: Removemos o /api/v1 para as rotas baterem com a sua Vercel de primeira! [1]
+app.use('/mastering', masteringRouter);
+app.use('/mix', mixRouter);
+app.use('/video', videoRouter);
+app.use('/stems', stemsRouter);
 
-// 🚀 Boot do Sistema (Mapeado para a porta 8080 do AWS Lambda Adapter)
+// 🚀 Boot do Sistema (Porta 8080)
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`RQS DSP Core rodando na porta ${PORT}`);
