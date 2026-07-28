@@ -34,3 +34,10 @@ ENV PORT=8080
 CMD ["node", "server.js"]
 
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1 /lambda-adapter /opt/extensions/lambda-adapter
+
+# 4. Copia os arquivos do Node e instala
+COPY package*.json ./
+RUN npm install
+
+# 🟢 FORÇA A INSTALAÇÃO DO SDK S3 DIRETAMENTE NO DOCKER (Ignora qualquer conflito de lockfile) [1]
+RUN npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
