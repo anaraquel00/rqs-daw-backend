@@ -9,11 +9,12 @@ const fs = require('fs');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
+// Inicializa o S3Client apontando para São Paulo e desativando checksums automáticos
 const s3Client = new S3Client({ 
     region: "sa-east-1",
     requestChecksumCalculation: "WHEN_REQUIRED"
 });
-const BUCKET_NAME = "amzn-rqs-bunker-sa";               // 🟢 Novo bucket de SP
+const BUCKET_NAME = "amzn-rqs-bunker-sa"; // Bucket de São Paulo
 
 // Configuração do Multer em disco efêmero para arquivos pequenos de teste (Previews) [1.1.2]
 const storage = multer.diskStorage({
@@ -35,7 +36,6 @@ router.get('/presigned-url', async (req, res) => {
 
         const s3Key = `uploads/${Date.now()}_${fileName}`;
         
-        // 🟢 Adiciona o ContentType dinâmico para garantir a assinatura correta no S3 [1.2.7]
         const fileExtension = path.extname(fileName).toLowerCase();
         let contentType;
         if (fileExtension === '.wav') {
@@ -61,7 +61,7 @@ router.get('/presigned-url', async (req, res) => {
 });
 
 // ============================================================================
-// ROTA 2: POST /mastering/process (Híbrida e Resiliente)
+// ROTA 2: POST /mastering/process (Híbrida, Inteligente e Resiliente)
 // ============================================================================
 router.post('/process', upload.any(), async (req, res) => {
     try {
@@ -123,48 +123,60 @@ router.post('/process', upload.any(), async (req, res) => {
             const output = data.toString().trim();
             console.log(`[PYTHON STDOUT]: ${output}`);
             if (output.startsWith('SUCESSO')) {
-                console.log(`[DSP ENGINE] Masterização concluída com sucesso! Enviando resultado para o S3...`);
                 
-                // 🟢 ENVIANDO A FARE MASTERIZADA DE VOLTA PARA O S3 (Bypass do limite de 6MB de download!) [1.2.6]
-                const cleanOriginalName = path.basename(inputPath).replace(/\.[^/.]+$/, "");
-                const masterS3Key = `masters/RQS_MASTER_${estilo.toUpperCase()}_${Date.now()}_${cleanOriginalName}.wav`;
-                const fileBuffer = fs.readFileSync(outputPath);
+                // 🟢 RAMIFICAÇÃO INTELIGENTE DE RESPOSTA [1, 1.1.2]
+                if (isPreview === 'true') {
+                    // CASO PREVIEW: Retorna o áudio de 15s direto por binário (Blob)
+                    // Como pesa apenas 1.3MB, passa perfeitamente no limite de 6MB da AWS!
+                    console.log(`[DSP ENGINE] Preview concluído com sucesso! Transmitindo binário direto...`);
+                    res.download(outputPath, 'rqs_preview.wav', () => {
+                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+                    });
+                } else {
+                    // CASO MASTER COMPLETA: Envia para o S3 e retorna a URL de download para o Angular [1.2.6]
+                    console.log(`[DSP ENGINE] Masterização completa concluída! Enviando resultado para o S3...`);
+                    
+                    const cleanOriginalName = path.basename(inputPath).replace(/\.[^/.]+$/, "");
+                    const cleanMasterName = `RQS_MASTER_${estilo.toUpperCase()}_${cleanOriginalName}_input_${Date.now()}`;
+                    const masterS3Key = `masters/${cleanMasterName}.wav`;
+                    const fileBuffer = fs.readFileSync(outputPath);
 
-                const uploadMasterCommand = new PutObjectCommand({
-                    Bucket: BUCKET_NAME,
-                    Key: masterS3Key,
-                    Body: fileBuffer,
-                    //ContentType: "audio/wav"
-                });
-
-                try {
-                    await s3Client.send(uploadMasterCommand);
-                    console.log(`[DSP ENGINE] Master enviada com sucesso para o S3: ${masterS3Key}`);
-
-                    // Gera uma URL temporária de download direto do S3 válida por 15 minutos [1.2.6]
-                    const getCommand = new GetObjectCommand({
+                    const uploadMasterCommand = new PutObjectCommand({
                         Bucket: BUCKET_NAME,
                         Key: masterS3Key,
-                        ResponseContentDisposition: `attachment; filename="RQS_MASTER_${estilo.toUpperCase()}_${cleanOriginalName}.wav"`
-                    });
-                    const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
-
-                    // Limpeza preventiva de arquivos temporários do /tmp
-                    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-
-                    // Retorna o JSON levíssimo (1 KB) com a URL de download do S3 (Sem erros de 413!) [1]
-                    res.status(200).json({ 
-                        success: true, 
-                        downloadUrl: downloadUrl,
-                        fileName: `RQS_MASTER_${estilo.toUpperCase()}_${cleanOriginalName}.wav`
+                        Body: fileBuffer,
+                        ContentType: "audio/wav"
                     });
 
-                } catch (s3Err) {
-                    console.error("[CRITICAL] Falha ao enviar ou gerar download URL no S3:", s3Err);
-                    if (!res.headersSent) res.status(500).json({ error: "Erro ao salvar e exportar master do S3." });
-                    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+                    try {
+                        await s3Client.send(uploadMasterCommand);
+                        console.log(`[DSP ENGINE] Master enviada com sucesso para o S3: ${masterS3Key}`);
+
+                        // Gera uma URL temporária de download direto do S3 válida por 15 minutos [1.2.6]
+                        const getCommand = new GetObjectCommand({
+                            Bucket: BUCKET_NAME,
+                            Key: masterS3Key,
+                            ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"`
+                        });
+                        const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
+
+                        // Limpeza preventiva de arquivos temporários do /tmp
+                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+
+                        res.status(200).json({ 
+                            success: true, 
+                            downloadUrl: downloadUrl,
+                            fileName: `${cleanMasterName}.wav`
+                        });
+
+                    } catch (s3Err) {
+                        console.error("[CRITICAL] Falha ao enviar ou gerar download URL no S3:", s3Err);
+                        if (!res.headersSent) res.status(500).json({ error: "Erro ao salvar e exportar master do S3." });
+                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+                    }
                 }
             } else if (output.startsWith('ERRO')) {
                 console.error(`[CRITICAL] Python Reportou Erro: ${output}`);
