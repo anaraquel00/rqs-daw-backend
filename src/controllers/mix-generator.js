@@ -9,11 +9,36 @@ const ffmpeg = require('fluent-ffmpeg');
 const upload = multer({ dest: '/tmp/' });
 
 router.post('/generate', upload.array('tracks', 20), (req, res) => {
+    const uploadedFiles = req.files || [];
+    const outputFileName = `RQS_SETLIST_${Date.now()}.wav`;
+    const outputDir = '/tmp/'; // 🛡️ Diretório efêmero de escrita do Lambda/Serverless
+    const outputFile = path.join(outputDir, outputFileName);
+
+    // Função de Limpeza de Emergência (Higienização de Disco)
+    const cleanup = (filesToClean, outputPath) => {
+        filesToClean.forEach(f => {
+            if (f && f.path && fs.existsSync(f.path)) {
+                try {
+                    fs.unlinkSync(f.path);
+                    console.log(`[CLEANUP] Removido com sucesso: ${f.path}`);
+                } catch (unlinkErr) {
+                    console.error(`[CRITICAL] Falha ao remover arquivo temporário ${f.path}:`, unlinkErr);
+                }
+            }
+        });
+        if (outputPath && fs.existsSync(outputPath)) {
+            try {
+                fs.unlinkSync(outputPath);
+                console.log(`[CLEANUP] Removido com sucesso: ${outputPath}`);
+            } catch (unlinkErr) {
+                console.error(`[CRITICAL] Falha ao remover arquivo de saída ${outputPath}:`, unlinkErr);
+            }
+        }
+    };
+
     try {
         console.log('💻 [MIX ENGINE] Iniciando cruzamento ponto-a-ponto via API...');
 
-        const uploadedFiles = req.files; 
-        
         // 🎛️ CAPTURA MICRO-CIRÚRGICA DOS CROSSFADES
         let fadeDurations = [];
         try {
@@ -32,11 +57,7 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
         }
 
         const vignettePath = path.join(__dirname, '../../assets', 'VIGNETTE_MAIN.wav'); 
-        const outputFileName = `RQS_SETLIST_${Date.now()}.wav`;
-        const outputDir = path.join(__dirname, '../../dist');
-        const outputFile = path.join(outputDir, outputFileName);
 
-        if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
         if (!fs.existsSync(vignettePath)) {
             console.error('[CRITICAL] VIGNETTE não encontrada.');
             return res.status(400).json({ error: 'A Vinheta de ID Drop não foi encontrada.' });
@@ -125,22 +146,31 @@ router.post('/generate', upload.array('tracks', 20), (req, res) => {
             .on('start', () => console.log('⚙️ Compilando Setlist com precisão cirúrgica...'))
             .on('end', () => {
                 console.log('💎 Deploy Concluído! Transmitindo...');
-                res.download(outputFile, outputFileName, (err) => {
-                    if (!err && fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
-                    uploadedFiles.forEach(f => {
-                        if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
-                    });
+                res.download(outputFile, outputFileName, (downloadErr) => {
+                    if (downloadErr) {
+                        console.error('[CRITICAL] Falha no download do cliente:', downloadErr);
+                    }
+                    // Limpeza completa de todos os arquivos temporários após o sucesso ou falha do download.
+                    cleanup(uploadedFiles, outputFile);
                 });
             })
             .on('error', (err) => {
                 console.error('\n🛡️ Falha Crítica no Pipeline:', err.message);
-                if (!res.headersSent) res.status(500).json({ error: 'Falha na renderização da Setlist.' });
+                // Protocolo SRE: Limpa o disco em caso de falha de renderização.
+                cleanup(uploadedFiles, outputFile);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: 'Falha na renderização da Setlist.' });
+                }
             })
             .save(outputFile);
 
     } catch (error) {
         console.error('[CRITICAL] Colapso geral:', error);
-        res.status(500).json({ error: 'Erro interno no motor.' });
+        // Protocolo SRE: Limpa o disco em caso de colapso geral da API.
+        cleanup(uploadedFiles, outputFile);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Erro interno no motor.' });
+        }
     }
 });
 

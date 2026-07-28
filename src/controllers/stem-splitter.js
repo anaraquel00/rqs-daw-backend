@@ -8,10 +8,7 @@ const fs = require('fs');
 // ====================================================================
 // 1. Configuração do Arsenal de Entrada (Multer mapeado para o /tmp) [1]
 // ====================================================================
-const uploadDir = '/tmp/stems'; // 🟢 CORREÇÃO: Aponta estritamente para a RAM temporária do Lambda
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true }); // Executa sem erro pois o /tmp permite escrita [1]
-}
+const uploadDir = '/tmp/'; // 🛡️ Aponta estritamente para a raiz do diretório efêmero do Lambda.
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),

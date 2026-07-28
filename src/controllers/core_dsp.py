@@ -127,39 +127,31 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         int_level = intensidade.lower().strip()
 
         if int_level == "baixa":
-            # Baixa intensidade: Foco total em transparência acústica e dinâmica livre (Sem distorção)
             target_lufs = -12.5 if faccao == "blue" else -11.5
             comp_threshold_modifier = 1.0    
-            ratio_multiplier = 0.75          # Suaviza a compressão multibanda ao mínimo
-            limiter_ceiling = -1.0           
-            limiter_release = 150.0          # Release lento impede o limiter de clipar o subgrave! [1.1.2]
+            ratio_multiplier = 0.75          
+            limiter_ceiling = -1.0 if faccao == "blue" else -1.8 # 🛡️ RED TEAM FAIL-SAFE
+            limiter_release = 150.0          
             
         elif int_level == "alta":
-            # Alta intensidade: Volume competitivo comercial de festival.
             target_lufs = -8.5 if faccao == "blue" else -8.0  
             comp_threshold_modifier = -2.0   
             ratio_multiplier = 1.25          
-            # Red Team ganha teto estrito de segurança em alta intensidade para prevenir distorção interamostra [1.1.2]
-            limiter_ceiling = -1.0 if faccao == "blue" else -2.0  
+            limiter_ceiling = -1.0 if faccao == "blue" else -2.0
             limiter_release = 80.0           
             
         else: # "media"
-            # Média intensidade: O ponto de equilíbrio ideal.
             target_lufs = -10.5 if faccao == "blue" else -9.5
             comp_threshold_modifier = -0.5   
             ratio_multiplier = 1.0           
-            limiter_ceiling = -1.2 if faccao == "blue" else -1.5
+            limiter_ceiling = -1.0 if faccao == "blue" else -1.8 # 🛡️ RED TEAM FAIL-SAFE
             limiter_release = 120.0          
 
         # 🟢 DEFENSA ACÚSTICA ADICIONAL (Anti-Distortion Density Shield): 
-        # Se for um arquivo Red Team (Industrial/Techno) e já for ultra-comprimido,
-        # aplicamos uma penalidade para impedir o esmagamento no limitador [1.2.6].
         if faccao == "red" and crest_factor_db < 7.5:
             lufs_penalty = 1.5 if crest_factor_db < 6.5 else 0.5
             target_lufs -= lufs_penalty
-            # Obriga o limitador a atuar com o teto de estúdio mais baixo para segurança física contra distorção
             limiter_ceiling = min(limiter_ceiling, -2.0)
-            # Desacelera o release do limiter para proteger o subgrave de ciclagens rápidas
             limiter_release = max(limiter_release, 150.0)
 
         # 6. MATRIZ MID/SIDE E PROCESSADORES DE SINAL INTEGRAIS
@@ -187,13 +179,11 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         # 7. COMPRESSÃO MULTIBANDA ADAPTADA À GUERRA ACÚSTICA (E REDUÇÃO DE TIMING PARA 140BPM+) [1.2]
         final_ratio = max(1.0, soft_ratio * ratio_multiplier) 
 
-        # Se for um arquivo Red Team de alta densidade (Schranz/Techno), 
-        # o release dos compressores cai de 160ms para 45ms! Isso sincroniza as batidas a 140+ BPM [1.2].
         if faccao == "red" and crest_factor_db < 7.5:
             low_release = 45.0
             mid_release = 50.0
             high_release = 20.0
-            high_ratio = max(1.2, final_ratio * 1.8) # Esmaga as sibilâncias industriais
+            high_ratio = max(1.2, final_ratio * 1.8) 
         else:
             low_release = 160.0
             mid_release = 150.0
@@ -223,15 +213,12 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         mid_low_processed = comp_low(mid_low[np.newaxis, :], sample_rate)[0]
         mid_mid_processed = comp_mid(mid_mid[np.newaxis, :], sample_rate)[0]
         
-        # 🟢 VACINA DE AGUDOS ADAPTATIVA (EDX Pro Sibilance Shield):
-        # Red Team corta agudos acima de 14.5kHz (Industrial/Acid/Hardcore) para expurgar sibilâncias.
-        # Blue Team mantém agudos superiores saudáveis até 15.5kHz para brilho elegante [1.1.8, 1.2.2].
         if faccao == "red" and crest_factor_db < 7.5:
-            hf_cutoff = 13800.0  # Limpa o teto de ruído digital de alta tensão da IA [1.1.8]
+            hf_cutoff = 13800.0  
             clean_highs = Pedalboard([
                 LowpassFilter(cutoff_frequency_hz=hf_cutoff),
-                PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0), # LED de estridência do EDX [1.2.2]
-                PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5), # LED de sibilância [1.2.2]
+                PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0), 
+                PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5), 
                 PeakFilter(cutoff_frequency_hz=8000.0, gain_db=-1.5, q=1.0)
             ])
         else:
@@ -248,7 +235,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         # Recombinação
         mid_processed = mid_low_processed + mid_mid_processed + mid_high_processed
 
-        # 8. EQUALIZAÇÃO CORRETIVA SUTIL (Pinceladas leves baseadas no peso de graves)
+        # 9. EQUALIZAÇÃO CORRETIVA SUTIL (Pinceladas leves baseadas no peso de graves)
         bass_intensity = rms_low_db - rms_mid_db 
         board_eq_mid = Pedalboard([])
 
@@ -265,6 +252,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             board_eq_mid.append(Distortion(drive_db=0.5)) 
 
         mid_processed = board_eq_mid(mid_processed[np.newaxis, :], sample_rate)[0]
+
 
         # 9. PROCESSAMENTO ESPACIAL (SIDE) SEGURO
         # Blue Team mantém o estéreo amplo. Red Team blinda as laterais contra chiados de fase em 13.5kHz [1.2.2].
