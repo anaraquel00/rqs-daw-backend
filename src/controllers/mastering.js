@@ -9,8 +9,8 @@ const fs = require('fs');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
-const s3Client = new S3Client({ region: "us-east-1" });
-const BUCKET_NAME = "amzn-rqs-bunker"; // 🟢 Mapeado para o seu novo bunker sônico!
+const s3Client = new S3Client({ region: "sa-east-1" }); // 🟢 Mapeado para São Paulo
+const BUCKET_NAME = "amzn-rqs-bunker-sa";               // 🟢 Novo bucket de SP
 
 // Configuração do Multer em disco efêmero para arquivos pequenos de teste (Previews) [1.1.2]
 const storage = multer.diskStorage({
