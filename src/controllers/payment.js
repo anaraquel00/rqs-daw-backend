@@ -11,9 +11,6 @@ const supabaseAdmin = createClient(
   {
     auth: {
       persistSession: false // Prática recomendada em ambientes SRE/Serverless
-    },
-    realtime: {
-      transport: ws // 🟢 INJETA O WEBSOCKET NATIVO PARA EVITAR O CRASH NO NODE 20
     }
   }
 );
