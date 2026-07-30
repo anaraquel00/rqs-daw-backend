@@ -2,7 +2,6 @@
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws');
 const stripe = require('stripe')('sk_test_51RvPs80vU1EZjW1G9ox6LBQpKUuljEAuDM4kWHz6ZQX4Bu9haOz8n8MamX11gq8afDJtdgo6SWRnouynUldNgCOD00C9LnVFkH'); // ⚠️ Substitua pela sua sk_test da Stripe
 
 // Inicializa o cliente administrativo do Supabase usando a sua SERVICE_ROLE_KEY
