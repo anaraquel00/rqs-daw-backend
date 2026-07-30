@@ -124,22 +124,31 @@ router.post('/process', upload.any(), async (req, res) => {
             console.log(`[PYTHON STDOUT]: ${output}`);
             if (output.startsWith('SUCESSO')) {
                 
-                // 🟢 RAMIFICAÇÃO INTELIGENTE DE RESPOSTA [1, 1.1.2]
                 if (isPreview === 'true') {
                     // CASO PREVIEW: Retorna o áudio de 15s direto por binário (Blob)
-                    // Como pesa apenas 1.3MB, passa perfeitamente no limite de 6MB da AWS!
                     console.log(`[DSP ENGINE] Preview concluído com sucesso! Transmitindo binário direto...`);
                     res.download(outputPath, 'rqs_preview.wav', () => {
                         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                     });
                 } else {
-                    // CASO MASTER COMPLETA: Envia para o S3 e retorna a URL de download para o Angular [1.2.6]
                     console.log(`[DSP ENGINE] Masterização completa concluída! Enviando resultado para o S3...`);
                     
-                    const cleanOriginalName = path.basename(inputPath).replace(/\.[^/.]+$/, "");
-                    const cleanMasterName = `RQS_MASTER_${estilo.toUpperCase()}_${cleanOriginalName}_input_${Date.now()}`;
-                    const masterS3Key = `masters/${cleanMasterName}.wav`;
+                    // 🟢 EXTRAÇÃO CIRÚRGICA DO NOME ORIGINAL (Bypass total de IDs e timestamps de máquina) [2.1.2]
+                    let originalName = "RQS_Track";
+                    if (s3Key) {
+                        const s3BaseName = path.basename(s3Key); // Ex: "1785411823580_Solão Sem Fim.wav"
+                        // Remove o timestamp de upload inicial do S3 ("1785411823580_") e a extensão [2.1.2]
+                        originalName = s3BaseName.replace(/^\d+_/, "").replace(/\.[^/.]+$/, ""); // Ex: "Solão Sem Fim"
+                    } else if (uploadedFile) {
+                        originalName = uploadedFile.originalname.replace(/\.[^/.]+$/, "");
+                    }
+
+                    // Nome limpo de estúdio para o download do usuário
+                    const cleanMasterName = `RQS_MASTER_${estilo.toUpperCase()}_${originalName}`;
+                    
+                    // Mantém o timestamp apenas na chave interna do S3 para evitar colisões físicas de mesmo nome [1]
+                    const masterS3Key = `masters/${cleanMasterName}_${Date.now()}.wav`;
                     const fileBuffer = fs.readFileSync(outputPath);
 
                     const uploadMasterCommand = new PutObjectCommand({
@@ -153,11 +162,11 @@ router.post('/process', upload.any(), async (req, res) => {
                         await s3Client.send(uploadMasterCommand);
                         console.log(`[DSP ENGINE] Master enviada com sucesso para o S3: ${masterS3Key}`);
 
-                        // Gera uma URL temporária de download direto do S3 válida por 15 minutos [1.2.6]
+                        // 🟢 O PULO DO GATO: Força o download do arquivo com a nomenclatura limpa de estúdio! [1.2.6]
                         const getCommand = new GetObjectCommand({
                             Bucket: BUCKET_NAME,
                             Key: masterS3Key,
-                            ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"`
+                            ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"` // Ex: "RQS_MASTER_CLEAR_SKY_Solão Sem Fim.wav"
                         });
                         const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
 
@@ -165,6 +174,7 @@ router.post('/process', upload.any(), async (req, res) => {
                         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
 
+                        // Devolve o JSON leve de download direto da nuvem [1]
                         res.status(200).json({ 
                             success: true, 
                             downloadUrl: downloadUrl,
