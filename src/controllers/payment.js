@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
-const stripe = require('stripe')('sk_test_51RvPs80vU1EZjW1G9ox6LBQpKUuljEAuDM4kWHz6ZQX4Bu9haOz8n8MamX11gq8afDJtdgo6SWRnouynUldNgCOD00C9LnVFkH'); // ⚠️ Substitua pela sua sk_test da Stripe
+// Inicializa o Stripe
+const stripe = require('stripe')('sk_test_51RvPs80vU1EZjW1G9ox6LBQpKUuljEAuDM4kWHz6ZQX4Bu9haOz8n8MamX11gq8afDJtdgo6SWRnouynUldNgCOD00C9LnVFkH');
 
 // Inicializa o cliente administrativo do Supabase usando a sua SERVICE_ROLE_KEY
 const supabaseAdmin = createClient(
@@ -18,7 +19,8 @@ const supabaseAdmin = createClient(
 // Segredo do Webhook gerado na aba Webhooks do seu painel da Stripe (ex: whsec_...) [1.1.8]
 const endpointSecret = 'whsec_rNEiVvlF4REHTG4Ehs0oXj3VssOx2c9A'; 
 
-router.post('/stripe-webhook', (req, res) => {
+// 🟢 CORREÇÃO 1: Adicionado o "async" na rota para permitir o controle de sincronia
+router.post('/stripe-webhook', async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
@@ -37,20 +39,24 @@ router.post('/stripe-webhook', (req, res) => {
 
     console.log(`[STRIPE PAY] Assinatura aprovada com sucesso para: ${userEmail}`);
 
-    // 🟢 UPGRADE SRE: Promove o usuário para PREMIUM diretamente no banco Postgres [1]
-    supabaseAdmin
-      .from('profiles')
-      .update({ role: 'premium' })
-      .eq('email', userEmail)
-      .then(({ error }) => {
-        if (error) {
-          console.error("[CRITICAL] Falha ao atualizar papel no Supabase:", error);
-        } else {
-          console.log(`[STRIPE PAY] Usuário ${userEmail} promovido para PREMIUM no banco de dados!`);
-        }
-      });
+    try {
+      // 🟢 CORREÇÃO 2: Usa o "await" para forçar a Lambda a esperar a gravação no Postgres terminar! [1.1.2]
+      const { error } = await supabaseAdmin
+        .from('profiles')
+        .update({ role: 'premium' })
+        .eq('email', userEmail);
+
+      if (error) {
+        console.error("[CRITICAL] Falha ao atualizar papel no Supabase:", error);
+      } else {
+        console.log(`[STRIPE PAY] Usuário ${userEmail} promovido para PREMIUM no banco de dados!`);
+      }
+    } catch (dbError) {
+      console.error("[CRITICAL] Erro de conexão com o banco Supabase:", dbError);
+    }
   }
 
+  // 🟢 Só responde 200 após garantir que a atualização assíncrona foi finalizada! [1.1.2]
   res.status(200).json({ received: true });
 });
 
