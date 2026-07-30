@@ -1,5 +1,5 @@
 # 1. Usa um servidor Linux oficial já com Node.js instalado
-FROM node:20-bookworm
+FROM node:22-bookworm
 
 # 2. Atualiza o sistema e instala o Python e a placa de som virtual (libsndfile)
 RUN apt-get update && apt-get install -y \

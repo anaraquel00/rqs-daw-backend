@@ -2,16 +2,25 @@
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
-const stripe = require('stripe')('sk_test_sua_chave_secreta_stripe_aqui'); // ⚠️ Substitua pela sua sk_test da Stripe
+const ws = require('ws');
+const stripe = require('stripe')('sk_test_51RvPs80vU1EZjW1G9ox6LBQpKUuljEAuDM4kWHz6ZQX4Bu9haOz8n8MamX11gq8afDJtdgo6SWRnouynUldNgCOD00C9LnVFkH'); // ⚠️ Substitua pela sua sk_test da Stripe
 
 // Inicializa o cliente administrativo do Supabase usando a sua SERVICE_ROLE_KEY
 const supabaseAdmin = createClient(
-  'https://ucearnthodrltkvkmhit.supabase.co', // ⚠️ Substitua pela sua URL do Supabase
-  'sb_secret_zzpzxNivmpASr9P23IWU3A_qFgq6hpV'     // ⚠️ Substitua pela sua Service Role Key (Secreta)
+  'https://ucearnthodrltkvkmhit.supabase.co',
+  'sb_secret_zzpzxNivmpASr9P23IWU3A_qFgq6hpV',
+  {
+    auth: {
+      persistSession: false // Prática recomendada em ambientes SRE/Serverless
+    },
+    realtime: {
+      transport: ws // 🟢 INJETA O WEBSOCKET NATIVO PARA EVITAR O CRASH NO NODE 20
+    }
+  }
 );
 
 // Segredo do Webhook gerado na aba Webhooks do seu painel da Stripe (ex: whsec_...) [1.1.8]
-const endpointSecret = 'whsec_seu_segredo_de_webhook_aqui'; 
+const endpointSecret = 'whsec_rNEiVvlF4REHTG4Ehs0oXj3VssOx2c9A'; 
 
 router.post('/stripe-webhook', (req, res) => {
   const sig = req.headers['stripe-signature'];
