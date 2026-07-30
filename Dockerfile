@@ -41,3 +41,6 @@ RUN npm install
 
 # 🟢 FORÇA A INSTALAÇÃO DO SDK S3 DIRETAMENTE NO DOCKER (Ignora qualquer conflito de lockfile) [1]
 RUN npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
+
+# 🟢 FORÇA A INSTALAÇÃO DO SDK S3, SUPABASE E STRIPE DIRETAMENTE NO DOCKER [1]
+RUN npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner @supabase/supabase-js stripe
