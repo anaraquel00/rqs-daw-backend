@@ -99,10 +99,17 @@ router.post('/generate-s3', async (req, res) => {
                 const currentOutput = `xfade${i}`;
                 const fadeDuration = parseFloat(fadeDurations[i]) || 8.0;
 
-                console.log(`⚙️ Injetando transição de ${fadeDuration}s entre Faixa ${i + 1} e Faixa ${i + 2}`);
+                // 🟢 CORREÇÃO CRUCIAL (SRE): Mapeia as curvas de forma matemática nativa para o FFmpeg
+                const selectedCurve = curva === 'equal-power' ? 'qsin' : (curva === 'fast-cut' ? 'exp' : 'tri');
+
+                console.log(`⚙️ Injetando transição de ${fadeDuration}s (Curva: ${selectedCurve}) entre Faixa ${i + 1} e Faixa ${i + 2}`);
                 complexFilter.push({
                     filter: 'acrossfade',
-                    options: { d: fadeDuration, curve: curva === 'equal-power' ? 'c1' : 'l' },
+                    options: { 
+                        d: fadeDuration, 
+                        c1: selectedCurve, // 🟢 c1 é a curva de fade-out do fim da faixa
+                        c2: selectedCurve  // 🟢 c2 é a curva de fade-in do início da faixa
+                    },
                     inputs: [lastOutput, nextInput],
                     outputs: currentOutput
                 });
