@@ -1,5 +1,7 @@
 import sys
 import os
+os.environ['HOME'] = '/tmp'
+os.environ['TORCH_HOME'] = '/tmp/torch_cache'
 import subprocess
 import zipfile
 import shutil
