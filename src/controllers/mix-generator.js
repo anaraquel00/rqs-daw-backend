@@ -20,9 +20,18 @@ const upload = multer({ dest: '/tmp/' });
 // 🟢 ROTA S3 NOVA: POST /mix/generate-s3 (Fluxo de Alta Performance com Bunker) [1.3.0]
 // ======================================================================================
 router.post('/generate-s3', async (req, res) => {
+    // 🛡️ PROTOCOLO SRE: Log detalhado do payload de entrada para rastreabilidade [1.3.1]
+    console.log('[MIX ENGINE S3] Payload recebido:', JSON.stringify(req.body, null, 2));
     const { s3Keys, crossfades, curva, loudness, exportName } = req.body;
+
+    // 🛡️ PROTOCOLO SRE: Validação de Schema do Payload [1.3.1]
+    if (!s3Keys || !Array.isArray(s3Keys) || s3Keys.length === 0) {
+        console.error('[CRITICAL S3] Falha de validação do payload: s3Keys está ausente, não é um array ou está vazio.');
+        return res.status(400).json({ error: 'Payload inválido: A propriedade "s3Keys" é obrigatória e deve ser uma lista de chaves S3.' });
+    }
+
     const localFilePaths = [];
-    const outputFileName = `${exportName.replace(/ /g, '_') || 'RQS_SETLIST'}_${Date.now()}.wav`;
+    const outputFileName = `${(exportName || 'RQS_SETLIST').replace(/ /g, '_')}_${Date.now()}.wav`;
     const outputFile = path.join('/tmp/', outputFileName);
 
     // Função de Limpeza de Emergência (Higienização de Disco)
@@ -51,25 +60,36 @@ router.post('/generate-s3', async (req, res) => {
         console.log('💻 [MIX ENGINE S3] Iniciando cruzamento S3 via API...');
         
         // 1. BAIXAR TODAS AS FAIXAS DO S3 PARA O /tmp
+        console.log('[S3 PIPELINE] Baixando faixas do Bunker S3...');
         for (const s3Key of s3Keys) {
-            const localPath = path.join('/tmp', `s3_${Date.now()}_${path.basename(s3Key)}`);
-            const downloadCommand = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key });
-            const s3Response = await s3Client.send(downloadCommand);
+            try {
+                const localPath = path.join('/tmp', `s3_${Date.now()}_${path.basename(s3Key)}`);
+                const downloadCommand = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key });
+                const s3Response = await s3Client.send(downloadCommand);
 
-            await new Promise((resolve, reject) => {
-                const fileStream = fs.createWriteStream(localPath);
-                s3Response.Body.pipe(fileStream);
-                s3Response.Body.on("error", reject);
-                fileStream.on("finish", resolve);
-            });
-            localFilePaths.push(localPath);
-            console.log(`[S3 PIPELINE] Baixada faixa ${s3Key} para ${localPath}`);
+                await new Promise((resolve, reject) => {
+                    const fileStream = fs.createWriteStream(localPath);
+                    s3Response.Body.pipe(fileStream);
+                    s3Response.Body.on("error", err => reject(new Error(`Falha no stream do body S3 para ${s3Key}: ${err.message}`)));
+                    fileStream.on("finish", resolve);
+                    fileStream.on("error", err => reject(new Error(`Falha ao escrever no disco para ${s3Key}: ${err.message}`)));
+                });
+                localFilePaths.push(localPath);
+                console.log(`[S3 PIPELINE] Baixada faixa ${s3Key} para ${localPath}`);
+            } catch (downloadError) {
+                console.error(`[CRITICAL S3] Falha ao baixar a faixa ${s3Key} do S3:`, downloadError);
+                throw new Error(`Não foi possível baixar o arquivo ${s3Key} do S3. Verifique se o arquivo existe e se as permissões do IAM Role estão corretas.`);
+            }
         }
+        console.log('[S3 PIPELINE] Todas as faixas foram baixadas com sucesso.');
 
         const vignettePath = path.join(__dirname, '../../assets', 'VIGNETTE_MAIN.wav');
         if (!fs.existsSync(vignettePath)) {
-            throw new Error('A Vinheta de ID Drop não foi encontrada.');
+            const errorMsg = `[CRITICAL S3] Arquivo de vinheta não encontrado no caminho esperado: ${vignettePath}. Verifique se a pasta 'assets' foi incluída no deploy.`;
+            console.error(errorMsg);
+            throw new Error(errorMsg);
         }
+        console.log('[MIX ENGINE S3] Vinheta de ID encontrada com sucesso em:', vignettePath);
 
         let command = ffmpeg();
         command.input(vignettePath); // Canal 0
@@ -120,7 +140,10 @@ router.post('/generate-s3', async (req, res) => {
         }
 
         command
-            .on('start', () => console.log('⚙️ Compilando Setlist S3 com precisão cirúrgica...'))
+            .on('start', (cmdLine) => {
+                console.log('⚙️ Compilando Setlist S3 com precisão cirúrgica...');
+                console.log('[FFMPEG CMD]', cmdLine); // 🛡️ SRE: Log do comando FFMPEG exato
+            })
             .on('end', async () => {
                 console.log('💎 Deploy S3 Concluído! Enviando para o Bunker...');
                 
@@ -149,17 +172,19 @@ router.post('/generate-s3', async (req, res) => {
                 // 5. LIMPEZA FINAL
                 cleanup(localFilePaths, outputFile);
             })
-            .on('error', (err) => {
-                console.error('\n🛡️ Falha Crítica no Pipeline S3:', err.message);
+            .on('error', (err, stdout, stderr) => { // 🛡️ SRE: Captura stdout/stderr do ffmpeg [1.3.1]
+                console.error('\n🛡️ Falha Crítica no Pipeline S3 do FFMPEG:', err.message);
+                console.error('FFMPEG STDOUT:', stdout);
+                console.error('FFMPEG STDERR:', stderr);
                 cleanup(localFilePaths, outputFile);
-                if (!res.headersSent) res.status(500).json({ error: 'Falha na renderização da Setlist S3.' });
+                if (!res.headersSent) res.status(500).json({ error: 'Falha na renderização da Setlist S3.', ffmpegError: stderr });
             })
             .save(outputFile);
 
     } catch (error) {
-        console.error('[CRITICAL S3] Colapso geral no motor de mixagem S3:', error);
+        console.error('[CRITICAL S3] Colapso geral no motor de mixagem S3:', error.message);
         cleanup(localFilePaths, outputFile);
-        if (!res.headersSent) res.status(500).json({ error: 'Erro interno no motor S3.' });
+        if (!res.headersSent) res.status(500).json({ error: 'Erro interno no motor S3.', details: error.message });
     }
 });
 

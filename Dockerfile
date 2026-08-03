@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     libsndfile1 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # 3. Define a pasta de trabalho do nosso app
