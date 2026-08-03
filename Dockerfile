@@ -36,14 +36,18 @@ CMD ["node", "server.js"]
 
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1 /lambda-adapter /opt/extensions/lambda-adapter
 
-# 4. Copia os arquivos do Node e instala
+# 9. Copia os arquivos do Node e instala
 COPY package*.json ./
 RUN npm install
 
-# 🟢 FORÇA A INSTALAÇÃO DO SDK S3 DIRETAMENTE NO DOCKER (Ignora qualquer conflito de lockfile) [1]
+# 10. 🟢 FORÇA A INSTALAÇÃO DO SDK S3 DIRETAMENTE NO DOCKER (Ignora qualquer conflito de lockfile) [1]
 RUN npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
 
-# 🟢 FORÇA A INSTALAÇÃO DO SDK S3, SUPABASE E STRIPE DIRETAMENTE NO DOCKER [1]
+# 11. 🟢 FORÇA A INSTALAÇÃO DO SDK S3, SUPABASE E STRIPE DIRETAMENTE NO DOCKER [1]
 RUN npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner @supabase/supabase-js stripe
 
-RUN /opt/venv/bin/pip3 install demucs torch torchaudio
+# 12. Instala a versão leve do PyTorch e Torchaudio focada em CPU [1.1.2]
+RUN /opt/venv/bin/pip3 install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# 13. Instala a biblioteca do Demucs logo em seguida [1.1.2]
+RUN /opt/venv/bin/pip3 install --no-cache-dir demucs
