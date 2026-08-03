@@ -51,3 +51,9 @@ RUN /opt/venv/bin/pip3 install --no-cache-dir torch torchaudio --index-url https
 
 # 13. Instala a biblioteca do Demucs logo em seguida [1.1.2]
 RUN /opt/venv/bin/pip3 install --no-cache-dir demucs
+
+# 14. 🟢 SRE PRE-BAKE: Define a pasta permanente de cache de pesos do PyTorch dentro da imagem
+ENV TORCH_HOME=/usr/src/app/torch_cache
+
+# 15. Força o download dos pesos do modelo (1 GB) durante o build do Docker na sua máquina
+RUN /opt/venv/bin/python3 -c "import os; os.environ['TORCH_HOME']='/usr/src/app/torch_cache'; from demucs.pretrained import get_model; get_model('htdemucs_6s')"
