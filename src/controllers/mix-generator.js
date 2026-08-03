@@ -17,50 +17,46 @@ const BUCKET_NAME = "amzn-rqs-bunker-sa";
 const upload = multer({ dest: '/tmp/' });
 
 // ======================================================================================
-// 🟢 ROTA S3 NOVA: POST /mix/generate-s3 (Fluxo de Alta Performance com Bunker) [1.3.0]
+// 🟢 ROTA S3: POST /mix/generate-s3 (Totalmente dinâmica - Sem arquivos locais!) [1.1.2]
 // ======================================================================================
 router.post('/generate-s3', async (req, res) => {
-    // 🛡️ PROTOCOLO SRE: Log detalhado do payload de entrada para rastreabilidade [1.3.1]
     console.log('[MIX ENGINE S3] Payload recebido:', JSON.stringify(req.body, null, 2));
     const { s3Keys, crossfades, curva, loudness, exportName } = req.body;
 
-    // 🛡️ PROTOCOLO SRE: Validação de Schema do Payload [1.3.1]
-    if (!s3Keys || !Array.isArray(s3Keys) || s3Keys.length === 0) {
-        console.error('[CRITICAL S3] Falha de validação do payload: s3Keys está ausente, não é um array ou está vazio.');
-        return res.status(400).json({ error: 'Payload inválido: A propriedade "s3Keys" é obrigatória e deve ser uma lista de chaves S3.' });
+    if (!s3Keys || !Array.isArray(s3Keys) || s3Keys.length < 2) {
+        console.error('[CRITICAL S3] Falha de validação: s3Keys precisa de pelo menos 2 faixas (Vinheta + Músicas).');
+        return res.status(400).json({ error: 'Payload inválido: Envie pelo menos 2 faixas (a primeira será tratada como a vinheta personalizada).' });
     }
 
     const localFilePaths = [];
     const outputFileName = `${(exportName || 'RQS_SETLIST').replace(/ /g, '_')}_${Date.now()}.wav`;
     const outputFile = path.join('/tmp/', outputFileName);
 
-    // Função de Limpeza de Emergência (Higienização de Disco)
     const cleanup = (filesToClean, outputPath) => {
         filesToClean.forEach(filePath => {
             if (filePath && fs.existsSync(filePath)) {
                 try {
                     fs.unlinkSync(filePath);
-                    console.log(`[CLEANUP S3] Removido com sucesso: ${filePath}`);
-                } catch (unlinkErr) {
-                    console.error(`[CRITICAL S3] Falha ao remover arquivo temporário ${filePath}:`, unlinkErr);
+                    console.log(`[CLEANUP S3] Removido temporário: ${filePath}`);
+                } catch (err) {
+                    console.error(`[CRITICAL S3] Falha ao remover ${filePath}:`, err);
                 }
             }
         });
         if (outputPath && fs.existsSync(outputPath)) {
             try {
                 fs.unlinkSync(outputPath);
-                console.log(`[CLEANUP S3] Removido com sucesso: ${outputPath}`);
-            } catch (unlinkErr) {
-                console.error(`[CRITICAL S3] Falha ao remover arquivo de saída ${outputPath}:`, unlinkErr);
+                console.log(`[CLEANUP S3] Removido saída: ${outputPath}`);
+            } catch (err) {
+                console.error(`[CRITICAL S3] Falha ao remover ${outputPath}:`, err);
             }
         }
     };
 
     try {
-        console.log('💻 [MIX ENGINE S3] Iniciando cruzamento S3 via API...');
+        console.log('💻 [MIX ENGINE S3] Iniciando cruzamento dinâmico via S3...');
         
-        // 1. BAIXAR TODAS AS FAIXAS DO S3 PARA O /tmp
-        console.log('[S3 PIPELINE] Baixando faixas do Bunker S3...');
+        // 1. BAIXAR TODAS AS FAIXAS DO S3 (Inclusive a sua vinheta gravada!) [1.1.2]
         for (const s3Key of s3Keys) {
             try {
                 const localPath = path.join('/tmp', `s3_${Date.now()}_${path.basename(s3Key)}`);
@@ -70,46 +66,43 @@ router.post('/generate-s3', async (req, res) => {
                 await new Promise((resolve, reject) => {
                     const fileStream = fs.createWriteStream(localPath);
                     s3Response.Body.pipe(fileStream);
-                    s3Response.Body.on("error", err => reject(new Error(`Falha no stream do body S3 para ${s3Key}: ${err.message}`)));
+                    s3Response.Body.on("error", err => reject(err));
                     fileStream.on("finish", resolve);
-                    fileStream.on("error", err => reject(new Error(`Falha ao escrever no disco para ${s3Key}: ${err.message}`)));
                 });
                 localFilePaths.push(localPath);
                 console.log(`[S3 PIPELINE] Baixada faixa ${s3Key} para ${localPath}`);
             } catch (downloadError) {
-                console.error(`[CRITICAL S3] Falha ao baixar a faixa ${s3Key} do S3:`, downloadError);
-                throw new Error(`Não foi possível baixar o arquivo ${s3Key} do S3. Verifique se o arquivo existe e se as permissões do IAM Role estão corretas.`);
+                console.error(`[CRITICAL S3] Falha no download de ${s3Key}:`, downloadError);
+                throw new Error(`Erro ao baixar a faixa ${s3Key} do S3.`);
             }
         }
-        console.log('[S3 PIPELINE] Todas as faixas foram baixadas com sucesso.');
 
-        const vignettePath = path.join(__dirname, '../../assets', 'VIGNETTE_MAIN.wav');
-        if (!fs.existsSync(vignettePath)) {
-            const errorMsg = `[CRITICAL S3] Arquivo de vinheta não encontrado no caminho esperado: ${vignettePath}. Verifique se a pasta 'assets' foi incluída no deploy.`;
-            console.error(errorMsg);
-            throw new Error(errorMsg);
-        }
-        console.log('[MIX ENGINE S3] Vinheta de ID encontrada com sucesso em:', vignettePath);
+        // 🟢 SEPARAÇÃO DINÂMICA: A primeira faixa do array é a sua vinheta gravada! [1.1.2]
+        const vignettePath = localFilePaths[0]; 
+        const musicFilePaths = localFilePaths.slice(1); // As demais são as músicas do setlist
+
+        console.log('[MIX ENGINE S3] Vinheta de áudio personalizada mapeada:', vignettePath);
+        console.log(`[MIX ENGINE S3] Total de faixas musicais para o set: ${musicFilePaths.length}`);
 
         let command = ffmpeg();
-        command.input(vignettePath); // Canal 0
-        localFilePaths.forEach(filePath => command.input(filePath)); // Canais 1 a N
+        command.input(vignettePath); // Canal 0 (Sua Vinheta dinâmica!)
+        musicFilePaths.forEach(filePath => command.input(filePath)); // Canais 1 a N
 
-        // 2. LÓGICA DE FILTRO COMPLEXO (Reutilizada e adaptada)
+        // 2. LÓGICA DE FILTRO COMPLEXO PONTO-A-PONTO
         let complexFilter = [];
-        let lastOutput = '1:a';
+        let lastOutput = '1:a'; // Inicia com a primeira faixa musical (Canal 1)
         const fadeDurations = crossfades || [];
 
-        if (localFilePaths.length > 1) {
-            for (let i = 0; i < localFilePaths.length - 1; i++) {
-                const nextInput = `${i + 2}:a`; // i+2 porque o input 0 é a vinheta, 1 é a primeira faixa
+        if (musicFilePaths.length > 1) {
+            for (let i = 0; i < musicFilePaths.length - 1; i++) {
+                const nextInput = `${i + 2}:a`; // Canal i+2
                 const currentOutput = `xfade${i}`;
                 const fadeDuration = parseFloat(fadeDurations[i]) || 8.0;
 
-                console.log(`⚙️ Injetando transição S3 de ${fadeDuration}s entre Faixa ${i + 1} e Faixa ${i + 2}`);
+                console.log(`⚙️ Injetando transição de ${fadeDuration}s entre Faixa ${i + 1} e Faixa ${i + 2}`);
                 complexFilter.push({
                     filter: 'acrossfade',
-                    options: { d: fadeDuration, curve: curva === 'equal-power' ? 'c1' : 'l' }, // Adapta curva
+                    options: { d: fadeDuration, curve: curva === 'equal-power' ? 'c1' : 'l' },
                     inputs: [lastOutput, nextInput],
                     outputs: currentOutput
                 });
@@ -117,6 +110,7 @@ router.post('/generate-s3', async (req, res) => {
             }
         }
         
+        // 3. AUTO-DUCKING DINÂMICO DA SUA VINHETA EM CIMA DA MIXAGEM [1.2]
         complexFilter.push({ filter: 'adelay', options: '2000|2000', inputs: '0:a', outputs: 'vignette_delayed' });
         complexFilter.push({ filter: 'volume', options: '1.6', inputs: 'vignette_delayed', outputs: 'vignette_boosted' });
         complexFilter.push({
@@ -134,20 +128,17 @@ router.post('/generate-s3', async (req, res) => {
 
         command.complexFilter(complexFilter, 'final_master');
         
-        // Normalização de Loudness (Opcional)
         if (loudness === 'normalize') {
             command.audioFilter('loudnorm');
         }
 
         command
             .on('start', (cmdLine) => {
-                console.log('⚙️ Compilando Setlist S3 com precisão cirúrgica...');
-                console.log('[FFMPEG CMD]', cmdLine); // 🛡️ SRE: Log do comando FFMPEG exato
+                console.log('⚙️ Compilando Setlist com precisão cirúrgica...');
+                console.log('[FFMPEG CMD]', cmdLine);
             })
             .on('end', async () => {
                 console.log('💎 Deploy S3 Concluído! Enviando para o Bunker...');
-                
-                // 3. UPLOAD DO RESULTADO FINAL PARA O S3
                 const masterS3Key = `setlists/${outputFileName}`;
                 const fileBuffer = fs.readFileSync(outputFile);
                 const uploadMasterCommand = new PutObjectCommand({
@@ -157,9 +148,7 @@ router.post('/generate-s3', async (req, res) => {
                     ContentType: "audio/wav"
                 });
                 await s3Client.send(uploadMasterCommand);
-                console.log(`[SETLIST ENGINE] Master S3 enviada com sucesso: ${masterS3Key}`);
 
-                // 4. GERAR URL DE DOWNLOAD ASSINADA
                 const getCommand = new GetObjectCommand({
                     Bucket: BUCKET_NAME,
                     Key: masterS3Key,
@@ -169,15 +158,12 @@ router.post('/generate-s3', async (req, res) => {
 
                 res.status(200).json({ success: true, downloadUrl: downloadUrl });
 
-                // 5. LIMPEZA FINAL
                 cleanup(localFilePaths, outputFile);
             })
-            .on('error', (err, stdout, stderr) => { // 🛡️ SRE: Captura stdout/stderr do ffmpeg [1.3.1]
+            .on('error', (err, stdout, stderr) => {
                 console.error('\n🛡️ Falha Crítica no Pipeline S3 do FFMPEG:', err.message);
-                console.error('FFMPEG STDOUT:', stdout);
-                console.error('FFMPEG STDERR:', stderr);
                 cleanup(localFilePaths, outputFile);
-                if (!res.headersSent) res.status(500).json({ error: 'Falha na renderização da Setlist S3.', ffmpegError: stderr });
+                if (!res.headersSent) res.status(500).json({ error: 'Falha na renderização da Setlist.', ffmpegError: stderr });
             })
             .save(outputFile);
 
