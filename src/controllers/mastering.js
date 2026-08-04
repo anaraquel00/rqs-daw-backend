@@ -71,7 +71,7 @@ router.post('/process', upload.any(), async (req, res) => {
         const uploadedFile = req.files && req.files.length > 0 ? req.files[0] : null;
         const s3Key = req.body.s3Key;
 
-        // CASO A: Upload comum direto (ideal para arquivos pequenos/previews) [1.1.2]
+        // CASO A: Upload comum direto (ideal para arquivos pequenos/previews)
         if (uploadedFile) {
             inputPath = uploadedFile.path;
             console.log(`[DSP ENGINE] Processando via upload direto: ${inputPath}`);
@@ -134,20 +134,26 @@ router.post('/process', upload.any(), async (req, res) => {
                 } else {
                     console.log(`[DSP ENGINE] Masterização completa concluída! Enviando resultado para o S3...`);
                     
-                    // 🟢 EXTRAÇÃO CIRÚRGICA DO NOME ORIGINAL (Bypass total de IDs e timestamps de máquina) [2.1.2]
+                    // EXTRAÇÃO CIRÚRGICA DO NOME ORIGINAL
                     let originalName = "RQS_Track";
                     if (s3Key) {
-                        const s3BaseName = path.basename(s3Key); // Ex: "1785411823580_Solão Sem Fim.wav"
-                        // Remove o timestamp de upload inicial do S3 ("1785411823580_") e a extensão [2.1.2]
-                        originalName = s3BaseName.replace(/^\d+_/, "").replace(/\.[^/.]+$/, ""); // Ex: "Solão Sem Fim"
+                        const s3BaseName = path.basename(s3Key); // Ex: "1785411823580_Different Roads..."
+                        originalName = s3BaseName.replace(/^\d+_/, "").replace(/\.[^/.]+$/, "");
                     } else if (uploadedFile) {
                         originalName = uploadedFile.originalname.replace(/\.[^/.]+$/, "");
                     }
 
+                    // 🟢 SANITIZAÇÃO CRÍTICA SRE: Remove acentuação e converte travessões (–, —) em hífens comuns (-) [1.1.2]
+                    // Isso evita totalmente o erro "InvalidArgument: Header value cannot be represented using ISO-8859-1" no S3! [1.1.2]
+                    const sanitizedOriginalName = originalName
+                        .replace(/[\u2010-\u2015]/g, "-")   // Converte En-Dashes e Em-Dashes em hífens ASCII comuns [1.1.2]
+                        .normalize("NFD")                   // Desmembra caracteres complexos (ã -> a + ~) [1.1.2]
+                        .replace(/[\u0300-\u036f]/g, "")    // Remove os acentos soltos do UTF-8 [1.1.2]
+                        .replace(/[^a-zA-Z0-9\s_,-]/g, "");   // Remove qualquer outro caractere proibido pelo padrão ISO-8859-1 [1.1.2]
+
                     // Nome limpo de estúdio para o download do usuário
-                    const cleanMasterName = `RQS_MASTER_${estilo.toUpperCase()}_${originalName}`;
+                    const cleanMasterName = `RQS_MASTER_${estilo.toUpperCase()}_${sanitizedOriginalName}`;
                     
-                    // Mantém o timestamp apenas na chave interna do S3 para evitar colisões físicas de mesmo nome [1]
                     const masterS3Key = `masters/${cleanMasterName}_${Date.now()}.wav`;
                     const fileBuffer = fs.readFileSync(outputPath);
 
@@ -162,19 +168,16 @@ router.post('/process', upload.any(), async (req, res) => {
                         await s3Client.send(uploadMasterCommand);
                         console.log(`[DSP ENGINE] Master enviada com sucesso para o S3: ${masterS3Key}`);
 
-                        // 🟢 O PULO DO GATO: Força o download do arquivo com a nomenclatura limpa de estúdio! [1.2.6]
                         const getCommand = new GetObjectCommand({
                             Bucket: BUCKET_NAME,
                             Key: masterS3Key,
-                            ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"` // Ex: "RQS_MASTER_CLEAR_SKY_Solão Sem Fim.wav"
+                            ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"` // 🟢 Nome sanitizado e seguro contra falhas ISO-8859-1! [1.1.2]
                         });
                         const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
 
-                        // Limpeza preventiva de arquivos temporários do /tmp
                         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
 
-                        // Devolve o JSON leve de download direto da nuvem [1]
                         res.status(200).json({ 
                             success: true, 
                             downloadUrl: downloadUrl,
