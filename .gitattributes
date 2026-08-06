@@ -1,0 +1,30 @@
+* text=auto
+
+*.py text eol=lf
+*.md text eol=lf
+*.mdc text eol=lf
+*.ini text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.wav binary
+*.flac binary
+*.mp3 binary
+*.ogg binary
+*.m4a binary
+*.aac binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.zip binary
+*.pt binary
+*.pth binary
