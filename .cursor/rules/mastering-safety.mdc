@@ -1,0 +1,22 @@
+﻿---
+description: RQS mastering engine safety workflow
+alwaysApply: true
+---
+
+Work only on the current feature branch.
+
+Before modifying DSP:
+1. Read the current implementation and all callers.
+2. Separate confirmed facts from hypotheses.
+3. Add a test reproducing the problem before implementing a fix.
+4. Never overwrite source audio.
+5. Never call a limiter True Peak unless final dBTP is independently measured.
+6. Never use sys.exit() inside DSP library code.
+7. Do not modify creative DSP and infrastructure in the same task.
+8. Preserve public API unless explicitly approved.
+9. Run pytest after every implementation step.
+10. Show git diff and exact test results before committing.
+11. Do not add dependencies without license and compatibility analysis.
+12. Never commit credentials, environment files or test audio.
+13. Do not silently change sample rate, channel layout or output format.
+14. Validate final WAV after writing and reopening it.
