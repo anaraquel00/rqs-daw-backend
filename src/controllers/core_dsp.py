@@ -6,7 +6,7 @@ import pyloudnorm as pyln
 from scipy.signal import butter, sosfiltfilt, lfilter, resample_poly
 from pedalboard import (
     Pedalboard, Compressor, HighpassFilter, HighShelfFilter, 
-    LowShelfFilter, Gain, PeakFilter, Distortion, NoiseGate, LowpassFilter
+    LowShelfFilter, Gain, PeakFilter, Distortion, LowpassFilter
 )
 
 try:
@@ -116,6 +116,16 @@ def saturate_side(side_channel: np.ndarray, sample_rate: float):
         + saturated_highs
     ).astype(np.float32)
 
+def calculate_input_pre_gain_db(initial_lufs: float) -> float:
+    """Return the legacy input pre-gain without applying a full-mix gate."""
+    if not np.isfinite(initial_lufs):
+        raise ValueError("Initial LUFS must be finite.")
+
+    if initial_lufs > -14.0:
+        return 0.0
+
+    return float(min(8.0, max(-8.0, -14.0 - initial_lufs)))
+
 def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False):
     validated_input = validate_mastering_request(input_path, output_path)
     input_path = str(validated_input.input_path)
@@ -158,18 +168,12 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         # 2. ANÁLISE INICIAL DE LOUDNESS
         meter = pyln.Meter(sample_rate)
         initial_lufs = meter.integrated_loudness(audio_data.T)
-        
-        if initial_lufs > -14.0:
-            pre_gain_value = 0.0
-            audio_data = Pedalboard([NoiseGate(threshold_db=-55.0, ratio=2.5, attack_ms=2.0, release_ms=200.0)])(audio_data, sample_rate)
-        else:
-            pre_gain_value = -14.0 - initial_lufs
-            pre_gain_value = min(8.0, max(-8.0, pre_gain_value))
-            gate_and_norm = Pedalboard([
-                NoiseGate(threshold_db=-55.0, ratio=2.5, attack_ms=2.0, release_ms=200.0),
+
+        pre_gain_value = calculate_input_pre_gain_db(initial_lufs)
+        if abs(pre_gain_value) > 1e-12:
+            audio_data = Pedalboard([
                 Gain(gain_db=pre_gain_value)
-            ])
-            audio_data = gate_and_norm(audio_data, sample_rate)
+            ])(audio_data, sample_rate)
 
         # 3. ANÁLISE ADAPTATIVA DSP DE CONTROLE DE PICO
         input_lufs = meter.integrated_loudness(audio_data.T)

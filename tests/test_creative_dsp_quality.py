@@ -111,10 +111,6 @@ def test_restore_transients_is_local_and_not_changed_by_later_peak(core_dsp_modu
     assert abs(gain_first_alone - gain_first_with_later) <= 0.01
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known creative-DSP defect: mastering applies an unconditional full-mix NoiseGate.",
-)
 def test_masterize_does_not_require_full_mix_noise_gate(
     core_dsp_module,
     tmp_path: Path,
@@ -134,7 +130,9 @@ def test_masterize_does_not_require_full_mix_noise_gate(
             "Full-mix NoiseGate must not be instantiated by default mastering."
         )
 
-    monkeypatch.setattr(core_dsp_module, "NoiseGate", forbidden_noise_gate)
+    monkeypatch.setattr(
+        core_dsp_module, "NoiseGate", forbidden_noise_gate, raising=False
+    )
 
     core_dsp_module.masterize(
         str(input_path),
