@@ -92,15 +92,31 @@ def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: flo
 
     return (signal_array * boost_factor).astype(np.float32)
 
-def saturate_side(side_channel: np.ndarray, sample_rate: float):
+def saturate_side(
+    side_channel: np.ndarray,
+    sample_rate: float,
+    amount: float = 1.0,
+):
     """
     Apply gentle high-frequency Side saturation with 4x oversampling.
+
+    amount=0.0 is an exact dry bypass.
+    amount=1.0 preserves the verified legacy behavior.
 
     The 5 kHz high-passed Side component is oversampled before the tanh
     non-linearity and polyphase-filtered back to the original sample rate.
     This keeps the original wet/dry topology while suppressing harmonic
     fold-back into the audible band.
     """
+    amount = float(amount)
+    if not np.isfinite(amount) or not 0.0 <= amount <= 1.0:
+        raise ValueError("Side saturation amount must be finite and between 0.0 and 1.0.")
+
+    dry = side_channel.astype(np.float64)
+
+    if amount == 0.0:
+        return dry.astype(np.float32)
+
     sos_hp = butter(2, 5000.0, btype='high', fs=sample_rate, output='sos')
     side_highs = sosfiltfilt(sos_hp, side_channel)
 
@@ -127,11 +143,16 @@ def saturate_side(side_channel: np.ndarray, sample_rate: float):
     # any one-sample rounding difference from future resampler changes.
     saturated_highs = saturated_highs[:side_channel.shape[0]]
 
-    return (
-        side_channel.astype(np.float64)
+    wet = (
+        dry
         - side_highs.astype(np.float64)
         + saturated_highs
-    ).astype(np.float32)
+    )
+
+    if amount == 1.0:
+        return wet.astype(np.float32)
+
+    return (dry + amount * (wet - dry)).astype(np.float32)
 
 def calculate_input_pre_gain_db(initial_lufs: float) -> float:
     """Return the legacy input pre-gain without applying a full-mix gate."""
@@ -143,7 +164,7 @@ def calculate_input_pre_gain_db(initial_lufs: float) -> float:
 
     return float(min(8.0, max(-8.0, -14.0 - initial_lufs)))
 
-def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None):
+def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0):
     validated_input = validate_mastering_request(input_path, output_path)
     input_path = str(validated_input.input_path)
     output_path = str(validated_input.output_path)
@@ -253,7 +274,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         side = ((L - R) * 0.5).astype(np.float32)
         
         mid = restore_transients(mid, crest_factor_db, sample_rate, faccao)
-        side = saturate_side(side, sample_rate)
+        side = saturate_side(side, sample_rate, side_saturation_amount)
         
         hp_mid = Pedalboard([HighpassFilter(cutoff_frequency_hz=30)])
         mid_filtered = hp_mid(mid[np.newaxis, :], sample_rate)[0]

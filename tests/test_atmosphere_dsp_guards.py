@@ -122,10 +122,26 @@ def test_transient_character_is_not_selected_by_blue_red_faction():
     assert "restore_transients(mid, crest_factor_db, sample_rate, faccao)" not in source
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known migration debt: Side saturation is still unconditional and not controlled by V2 intensity.",
-)
-def test_side_saturation_is_not_unconditional_in_v2_creative_path():
-    source = _core_source()
-    assert "side = saturate_side(side, sample_rate)" not in source
+def test_side_saturation_is_controlled_by_v2_intensity(monkeypatch):
+    calls = []
+
+    def fake_masterize(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "ok"
+
+    monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake_masterize)
+
+    result = mastering_v2.masterize_v2(
+        "input.wav",
+        "output.wav",
+        destination="club",
+        atmosphere="aurora",
+        intensity_percent=50,
+        requested_lufs=-11.0,
+    )
+
+    assert result == "ok"
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert kwargs == {}
+    assert args[7] == 0.5

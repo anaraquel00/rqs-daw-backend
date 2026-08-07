@@ -52,21 +52,24 @@ def test_routes_spotify(monkeypatch):
     assert mastering_v2.masterize_v2(
         "in", "out", destination="streaming", platform="spotify",
         atmosphere="thunder", intensity_percent=90) == "ok"
-    assert c == [("in", "out", "clear_sky", "media", False, -14.0, -1.2)]
+    assert c[0][:-1] == ("in", "out", "clear_sky", "media", False, -14.0, -1.2)
+    assert abs(c[0][-1] - 0.972) < 1e-12
 
 def test_routes_club(monkeypatch):
     c = _capture(monkeypatch)
     mastering_v2.masterize_v2(
         "in", "out", destination="club",
         atmosphere="aurora", intensity_percent=10)
-    assert c[0][-2:] == (-10.5, -1.0)
+    assert c[0][-3:-1] == (-10.5, -1.0)
+    assert abs(c[0][-1] - 0.028) < 1e-12
 
 def test_routes_festival(monkeypatch):
     c = _capture(monkeypatch)
     mastering_v2.masterize_v2(
         "in", "out", destination="festival",
         atmosphere="sunroof", intensity_percent=50)
-    assert c[0][-2:] == (-9.5, -1.0)
+    assert c[0][-3:-1] == (-9.5, -1.0)
+    assert abs(c[0][-1] - 0.5) < 1e-12
 
 def test_routes_preview(monkeypatch):
     c = _capture(monkeypatch)
