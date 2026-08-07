@@ -108,7 +108,7 @@ class MasteringPipeline:
             preview_len = int(15 * sample_rate)
             if duration_samples > preview_len:
                 start_sample = (duration_samples - preview_len) // 2
-                audio, sr = sf.read(input_path, start_time=start_sample, frames=preview_len, dtype="float32")
+                audio, sr = sf.read(input_path, start=start_sample, frames=preview_len, dtype="float32")
             else:
                 audio, sr = sf.read(input_path, dtype="float32")
         else:
