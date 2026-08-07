@@ -25,6 +25,11 @@ class Atmosphere(str, Enum):
     CLEAR_SKY = "clear_sky"
 
 
+class SoundCloudMode(str, Enum):
+    STANDARD = "standard"
+    LOUD = "loud"
+
+
 @dataclass(frozen=True)
 class DeliveryTarget:
     destination: Destination
@@ -52,6 +57,7 @@ class MasteringRequest:
     atmosphere: AtmosphereProfile
     intensity_percent: float
     character_amount: float
+    target_lufs: float
 
 
 ATMOSPHERES = {
@@ -86,6 +92,11 @@ _STREAMING_TARGETS = {
 }
 
 
+_SOUNDCLOUD_LOUD_TARGET = DeliveryTarget(
+    Destination.STREAMING, Platform.SOUNDCLOUD, -11.0, -12.0, -10.0, -2.0,
+    8.5, 0.75, 2.0, "krismig_soundcloud_loud_v1"
+)
+
 _NON_STREAMING_TARGETS = {
     Destination.CLUB: DeliveryTarget(
         Destination.CLUB, None, -10.5, -11.5, -10.0, -1.0,
@@ -98,15 +109,40 @@ _NON_STREAMING_TARGETS = {
 }
 
 
-def resolve_delivery_target(destination: Destination | str, platform: Platform | str | None = None) -> DeliveryTarget:
+def resolve_delivery_target(
+    destination: Destination | str,
+    platform: Platform | str | None = None,
+    soundcloud_mode: SoundCloudMode | str = SoundCloudMode.STANDARD,
+) -> DeliveryTarget:
     destination = Destination(destination)
+    soundcloud_mode = SoundCloudMode(soundcloud_mode)
     if destination is Destination.STREAMING:
         if platform is None:
             raise ValueError("Streaming requires a platform.")
-        return _STREAMING_TARGETS[Platform(platform)]
+        platform = Platform(platform)
+        if platform is Platform.SOUNDCLOUD:
+            if soundcloud_mode is SoundCloudMode.LOUD:
+                return _SOUNDCLOUD_LOUD_TARGET
+            return _STREAMING_TARGETS[platform]
+        if soundcloud_mode is not SoundCloudMode.STANDARD:
+            raise ValueError("SoundCloud mode is only valid for SoundCloud.")
+        return _STREAMING_TARGETS[platform]
     if platform is not None:
         raise ValueError("Platform is only valid for the streaming destination.")
+    if soundcloud_mode is not SoundCloudMode.STANDARD:
+        raise ValueError("SoundCloud mode is only valid for SoundCloud.")
     return _NON_STREAMING_TARGETS[destination]
+
+
+def resolve_requested_lufs(delivery: DeliveryTarget, requested_lufs: float | None = None) -> float:
+    if requested_lufs is None:
+        return delivery.target_lufs
+    value = float(requested_lufs)
+    if not delivery.min_lufs <= value <= delivery.max_lufs:
+        raise ValueError(
+            f"Requested LUFS {value:.2f} is outside allowed range "            f"{delivery.min_lufs:.2f}..{delivery.max_lufs:.2f}."
+        )
+    return value
 
 
 def intensity_to_character_amount(intensity_percent: float) -> float:
@@ -134,12 +170,16 @@ def build_mastering_request(
     atmosphere: Atmosphere | str,
     intensity_percent: float,
     platform: Platform | str | None = None,
+    requested_lufs: float | None = None,
+    soundcloud_mode: SoundCloudMode | str = SoundCloudMode.STANDARD,
 ) -> MasteringRequest:
-    delivery = resolve_delivery_target(destination, platform)
+    delivery = resolve_delivery_target(destination, platform, soundcloud_mode=soundcloud_mode)
     atmosphere_profile = ATMOSPHERES[Atmosphere(atmosphere)]
+    target_lufs = resolve_requested_lufs(delivery, requested_lufs)
     return MasteringRequest(
         delivery=delivery,
         atmosphere=atmosphere_profile,
         intensity_percent=float(intensity_percent),
         character_amount=intensity_to_character_amount(intensity_percent),
+        target_lufs=target_lufs,
     )
