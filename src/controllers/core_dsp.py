@@ -29,9 +29,9 @@ except ImportError:
     )
 
 try:
-    from .mastering_finalizer import finalize_true_peak
+    from .mastering_loudness import finalize_loudness
 except ImportError:
-    from mastering_finalizer import finalize_true_peak
+    from mastering_loudness import finalize_loudness
 
 def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.0, high_cutoff: float = 5000.0):
     """
@@ -325,41 +325,28 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         del L, R, mid, side, mid_filtered, mid_low, mid_mid, mid_high, mid_low_processed, mid_mid_processed, mid_high_processed, L_new, R_new
         gc.collect()
 
-        # 11. ESTÁGIO DE COMPENSAÇÃO DE GANHO FINAL E LIMITADOR (TRUE PEAK OVERSAMPLING 4X)
-        audio_for_meter = audio_reconstructed.T
-        current_lufs = meter.integrated_loudness(audio_for_meter)
-        
-        gain_needed = target_lufs - current_lufs
-
-        # Impede que o limitador final trabalhe duro em picos
-        if gain_needed > 5.0:
-            pre_boost = gain_needed - 3.0
-            audio_reconstructed = Pedalboard([Gain(gain_db=pre_boost)])(audio_reconstructed, sample_rate)
-            gain_needed = 3.0
-
-        # Gain compensation remains in Python. The final peak stage is rendered
-        # externally and verified on the saved PCM24 file.
-        final_audio = Pedalboard([
-            Gain(gain_db=gain_needed)
-        ])(audio_reconstructed, sample_rate).T
-
-        # 12. VERIFIED TRUE PEAK FINALIZER + ATOMIC PUBLICATION
+        # 11-12. VERIFIED ITERATIVE LUFS + TRUE PEAK FINALIZATION
+        # The creative DSP output is written once as FLOAT. Every loudness pass
+        # starts again from this same source, so limiter artifacts are not
+        # cascaded from one iteration into the next.
         pre_finalizer_path = create_temporary_output_path(output_path)
         temporary_output_path = create_temporary_output_path(output_path)
 
         sf.write(
             str(pre_finalizer_path),
-            final_audio,
+            audio_reconstructed.T,
             sample_rate,
             format='WAV',
             subtype='FLOAT',
         )
 
-        finalizer_result = finalize_true_peak(
+        loudness_result = finalize_loudness(
             pre_finalizer_path,
             temporary_output_path,
+            target_lufs=target_lufs,
             ceiling_dbtp=limiter_ceiling,
             release_ms=limiter_release,
+            tolerance_lu=0.2,
         )
         cleanup_temporary_output(pre_finalizer_path)
         pre_finalizer_path = None
@@ -371,9 +358,9 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         )
         publish_temporary_output(temporary_output_path, output_path)
         temporary_output_path = None
-        
+
         tipo_processo = "PREVIEW" if is_preview else "MASTER"
-        print(f"SUCESSO|{gain_needed + pre_gain_value:.2f}|{target_lufs:.1f}_LUFS|{tipo_processo}|{crest_factor_db:.2f}dB_Dinâmica|Teto_{limiter_ceiling:.1f}dBTP")
+        print(f"SUCESSO|{loudness_result.total_gain_db + pre_gain_value:.2f}|{target_lufs:.1f}_LUFS|{tipo_processo}|{crest_factor_db:.2f}dB_Dinâmica|Teto_{limiter_ceiling:.1f}dBTP")
 
     except Exception:
         cleanup_temporary_output(pre_finalizer_path)

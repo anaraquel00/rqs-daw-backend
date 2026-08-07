@@ -89,10 +89,6 @@ def test_media_profile_respects_minus_1_dbtp_ceiling(
     assert loudness["true_peak_dbtp"] <= -0.95
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: target LUFS is calculated once and is not validated iteratively.",
-)
 def test_media_profile_reaches_target_lufs_within_point_2_lu(
     tmp_path: Path,
 ) -> None:
