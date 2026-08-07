@@ -58,20 +58,22 @@ def test_core_dsp_no_longer_maps_atmospheres_to_blue_red_factions():
     assert 'faccao = "blue" if perfil in ["clear_sky", "clear sky", "aurora"] else "red"' not in source
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known migration debt: intensity 0 still calls the legacy Clear Sky/media creative path.",
-)
-def test_zero_intensity_does_not_invoke_legacy_creative_clear_sky_media(monkeypatch):
-    calls = []
+def test_zero_intensity_final_render_uses_delivery_only_path(monkeypatch):
+    core_calls = []
+    loudness_calls = []
 
-    def fake_masterize(*args):
-        calls.append(args)
-        return "ok"
+    def fake_masterize(*args, **kwargs):
+        core_calls.append((args, kwargs))
+        return "legacy"
+
+    def fake_finalize_loudness(input_path, output_path, **kwargs):
+        loudness_calls.append((input_path, output_path, kwargs))
+        return "delivery-only"
 
     monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake_masterize)
+    monkeypatch.setattr(mastering_v2, "finalize_loudness", fake_finalize_loudness)
 
-    mastering_v2.masterize_v2(
+    result = mastering_v2.masterize_v2(
         "input.wav",
         "output.wav",
         destination="club",
@@ -80,8 +82,16 @@ def test_zero_intensity_does_not_invoke_legacy_creative_clear_sky_media(monkeypa
         requested_lufs=-11.0,
     )
 
-    assert calls
-    assert calls[0][2:4] != ("clear_sky", "media")
+    assert result == "delivery-only"
+    assert core_calls == []
+    assert len(loudness_calls) == 1
+
+    input_path, output_path, kwargs = loudness_calls[0]
+    assert input_path == "input.wav"
+    assert output_path == "output.wav"
+    assert kwargs["target_lufs"] == -11.0
+    assert kwargs["ceiling_dbtp"] == -1.0
+    assert kwargs["release_ms"] == mastering_v2.DELIVERY_ONLY_RELEASE_MS
 
 
 @pytest.mark.xfail(

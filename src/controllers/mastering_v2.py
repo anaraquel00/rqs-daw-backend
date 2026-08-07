@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from . import core_dsp
+from .mastering_loudness import finalize_loudness
 from .mastering_profiles import (
     Atmosphere, Destination, MasteringRequest, Platform, SoundCloudMode,
     build_mastering_request, recommended_true_peak_ceiling,
@@ -14,6 +15,10 @@ class RenderPlanV2:
     true_peak_ceiling_dbtp: float
     legacy_dsp_style: str = "clear_sky"
     legacy_dsp_intensity: str = "media"
+
+
+DELIVERY_ONLY_RELEASE_MS = 120.0
+
 
 def build_render_plan_v2(*, destination, atmosphere, intensity_percent, platform=None, requested_lufs=None, soundcloud_mode=SoundCloudMode.STANDARD):
     request = build_mastering_request(
@@ -41,6 +46,18 @@ def masterize_v2(input_path, output_path, *, destination, atmosphere,
         requested_lufs=requested_lufs,
         soundcloud_mode=soundcloud_mode,
     )
+    # V2 contract: 0% means no creative Atmosphere processing.
+    # Keep preview on the legacy path for now; preview architecture is a
+    # separate migration item and must not be changed silently here.
+    if plan.request.character_amount == 0.0 and not is_preview:
+        return finalize_loudness(
+            input_path,
+            output_path,
+            target_lufs=plan.target_lufs,
+            ceiling_dbtp=plan.true_peak_ceiling_dbtp,
+            release_ms=DELIVERY_ONLY_RELEASE_MS,
+        )
+
     return core_dsp.masterize(
         input_path, output_path,
         plan.legacy_dsp_style,
