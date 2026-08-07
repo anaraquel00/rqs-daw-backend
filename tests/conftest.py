@@ -153,3 +153,9 @@ def ffmpeg_loudness_metrics(path: Path) -> dict[str, float]:
 @pytest.fixture
 def dense_stereo_44100() -> tuple[np.ndarray, int]:
     return make_dense_stereo(), 44_100
+
+@pytest.fixture
+def core_dsp_module():
+    """Import the current mastering core for direct creative-DSP quality tests."""
+    import importlib
+    return importlib.import_module("src.controllers.core_dsp")
