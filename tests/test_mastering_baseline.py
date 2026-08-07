@@ -70,10 +70,6 @@ def test_silence_is_rejected_without_output(tmp_path: Path) -> None:
     assert "silent" in f"{result.stdout}\n{result.stderr}".lower()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: Pedalboard Limiter threshold is not an output dBTP ceiling.",
-)
 def test_media_profile_respects_minus_1_dbtp_ceiling(
     tmp_path: Path,
     dense_stereo_44100: tuple[np.ndarray, int],
@@ -99,10 +95,20 @@ def test_media_profile_respects_minus_1_dbtp_ceiling(
 )
 def test_media_profile_reaches_target_lufs_within_point_2_lu(
     tmp_path: Path,
-    dense_stereo_44100: tuple[np.ndarray, int],
 ) -> None:
     target_lufs = -10.5
-    audio, sample_rate = dense_stereo_44100
+    sample_rate = 44_100
+    duration_seconds = 8
+    frame_count = sample_rate * duration_seconds
+    t = np.arange(frame_count, dtype=np.float64) / sample_rate
+
+    # Stress one-shot loudness correction with sparse high peaks. A verified
+    # True Peak limiter can reduce level here, so the engine must re-measure
+    # and correct loudness iteratively in a later stage.
+    mono = (0.03 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
+    mono[:: sample_rate // 4] = 0.99
+    audio = np.column_stack((mono, mono))
+
     input_path = write_audio(tmp_path / "lufs_input.wav", audio, sample_rate)
     output_path = tmp_path / "lufs_output.wav"
 

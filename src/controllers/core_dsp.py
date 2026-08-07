@@ -6,7 +6,7 @@ import pyloudnorm as pyln
 from scipy.signal import butter, sosfiltfilt, lfilter
 from pedalboard import (
     Pedalboard, Compressor, HighpassFilter, HighShelfFilter, 
-    LowShelfFilter, Limiter, Gain, Resample, PeakFilter, Distortion, NoiseGate, LowpassFilter
+    LowShelfFilter, Gain, PeakFilter, Distortion, NoiseGate, LowpassFilter
 )
 
 try:
@@ -27,6 +27,11 @@ except ImportError:
         validate_mastering_request,
         validate_written_output,
     )
+
+try:
+    from .mastering_finalizer import finalize_true_peak
+except ImportError:
+    from mastering_finalizer import finalize_true_peak
 
 def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.0, high_cutoff: float = 5000.0):
     """
@@ -87,6 +92,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
     input_path = str(validated_input.input_path)
     output_path = str(validated_input.output_path)
     temporary_output_path = None
+    pre_finalizer_path = None
 
     try:
         # 1. LEITURA SELETIVA E ULTRA-RÁPIDA (ZLP - Zero Latency Preview) [1]
@@ -331,26 +337,33 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             audio_reconstructed = Pedalboard([Gain(gain_db=pre_boost)])(audio_reconstructed, sample_rate)
             gain_needed = 3.0
 
-        oversampled_rate = sample_rate * 4.0
-        board_master = Pedalboard([
-            Resample(target_sample_rate=oversampled_rate),
-            Gain(gain_db=gain_needed),
-            # 🟢 CORREÇÃO: O release_ms do Limiter agora é dinâmico (limiter_release) para proteger o subgrave de clipar! [1.1.2]
-            Limiter(threshold_db=limiter_ceiling, release_ms=limiter_release), 
-            Resample(target_sample_rate=sample_rate)
-        ])
+        # Gain compensation remains in Python. The final peak stage is rendered
+        # externally and verified on the saved PCM24 file.
+        final_audio = Pedalboard([
+            Gain(gain_db=gain_needed)
+        ])(audio_reconstructed, sample_rate).T
 
-        final_audio = board_master(audio_reconstructed, sample_rate).T
-
-        # 12. GRAVAÇÃO EM PCM_24 COM PUBLICAÇÃO ATÔMICA
+        # 12. VERIFIED TRUE PEAK FINALIZER + ATOMIC PUBLICATION
+        pre_finalizer_path = create_temporary_output_path(output_path)
         temporary_output_path = create_temporary_output_path(output_path)
+
         sf.write(
-            str(temporary_output_path),
+            str(pre_finalizer_path),
             final_audio,
             sample_rate,
             format='WAV',
-            subtype='PCM_24',
+            subtype='FLOAT',
         )
+
+        finalizer_result = finalize_true_peak(
+            pre_finalizer_path,
+            temporary_output_path,
+            ceiling_dbtp=limiter_ceiling,
+            release_ms=limiter_release,
+        )
+        cleanup_temporary_output(pre_finalizer_path)
+        pre_finalizer_path = None
+
         validate_written_output(
             temporary_output_path,
             expected_sample_rate=sample_rate,
@@ -363,6 +376,7 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         print(f"SUCESSO|{gain_needed + pre_gain_value:.2f}|{target_lufs:.1f}_LUFS|{tipo_processo}|{crest_factor_db:.2f}dB_Dinâmica|Teto_{limiter_ceiling:.1f}dBTP")
 
     except Exception:
+        cleanup_temporary_output(pre_finalizer_path)
         cleanup_temporary_output(temporary_output_path)
         raise
 
