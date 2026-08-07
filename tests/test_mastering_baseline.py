@@ -57,11 +57,7 @@ def test_short_file_is_rejected_without_output(tmp_path: Path) -> None:
     assert not output_path.exists()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: silence may become an almost full-scale constant signal.",
-)
-def test_silence_remains_silent(tmp_path: Path) -> None:
+def test_silence_is_rejected_without_output(tmp_path: Path) -> None:
     sample_rate = 44_100
     audio = np.zeros((sample_rate * 3, 2), dtype=np.float32)
     input_path = write_audio(tmp_path / "silence.wav", audio, sample_rate)
@@ -69,11 +65,9 @@ def test_silence_remains_silent(tmp_path: Path) -> None:
 
     result = run_mastering(input_path, output_path)
 
-    assert result.returncode == 0, _diagnostic_message(result)
-    metrics = read_audio_metrics(output_path)
-    assert metrics["finite"]
-    assert metrics["sample_peak"] <= 1e-4
-    assert metrics["rms"] <= 1e-5
+    assert result.returncode != 0
+    assert not output_path.exists()
+    assert "silent" in f"{result.stdout}\n{result.stderr}".lower()
 
 
 @pytest.mark.xfail(
@@ -120,10 +114,6 @@ def test_media_profile_reaches_target_lufs_within_point_2_lu(
     assert abs(measured["integrated_lufs"] - target_lufs) <= 0.2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: unsupported low sample rates are not validated before fixed-frequency DSP.",
-)
 def test_16khz_input_is_rejected_without_partial_output(tmp_path: Path) -> None:
     sample_rate = 16_000
     audio = make_dense_stereo(
@@ -140,10 +130,6 @@ def test_16khz_input_is_rejected_without_partial_output(tmp_path: Path) -> None:
     assert not output_path.exists()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: channels above L/R are silently discarded.",
-)
 def test_four_channel_input_is_rejected_without_output(tmp_path: Path) -> None:
     sample_rate = 44_100
     stereo = make_dense_stereo(
@@ -169,10 +155,6 @@ def test_four_channel_input_is_rejected_without_output(tmp_path: Path) -> None:
     assert not output_path.exists()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: masterize() calls sys.exit() inside library code.",
-)
 def test_masterize_library_function_does_not_call_sys_exit() -> None:
     source = CORE_DSP.read_text(encoding="utf-8")
     module = ast.parse(source)

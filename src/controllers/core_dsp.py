@@ -9,6 +9,25 @@ from pedalboard import (
     LowShelfFilter, Limiter, Gain, Resample, PeakFilter, Distortion, NoiseGate, LowpassFilter
 )
 
+try:
+    from .mastering_validation import (
+        cleanup_temporary_output,
+        create_temporary_output_path,
+        publish_temporary_output,
+        validate_audio_samples,
+        validate_mastering_request,
+        validate_written_output,
+    )
+except ImportError:
+    from mastering_validation import (
+        cleanup_temporary_output,
+        create_temporary_output_path,
+        publish_temporary_output,
+        validate_audio_samples,
+        validate_mastering_request,
+        validate_written_output,
+    )
+
 def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.0, high_cutoff: float = 5000.0):
     """
     Divide o canal de áudio em 3 de forma limpa com fase linear zero.
@@ -64,6 +83,11 @@ def saturate_side(side_channel: np.ndarray, sample_rate: float):
     return (side_channel - side_highs + saturated_highs).astype(np.float32)
 
 def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False):
+    validated_input = validate_mastering_request(input_path, output_path)
+    input_path = str(validated_input.input_path)
+    output_path = str(validated_input.output_path)
+    temporary_output_path = None
+
     try:
         # 1. LEITURA SELETIVA E ULTRA-RÁPIDA (ZLP - Zero Latency Preview) [1]
         if is_preview:
@@ -82,6 +106,11 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             audio_data, sample_rate = sf.read(input_path, start=start_frame, frames=preview_frames, dtype='float32')
         else:
             audio_data, sample_rate = sf.read(input_path, dtype='float32')
+
+        audio_data = validate_audio_samples(
+            audio_data,
+            expected_channels=validated_input.channels,
+        )
         
         if audio_data.ndim == 1:
             audio_data = np.column_stack((audio_data, audio_data))
@@ -313,19 +342,47 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
 
         final_audio = board_master(audio_reconstructed, sample_rate).T
 
-        # 12. GRAVAÇÃO EM PCM_24
-        sf.write(output_path, final_audio, sample_rate, format='WAV', subtype='PCM_24')
+        # 12. GRAVAÇÃO EM PCM_24 COM PUBLICAÇÃO ATÔMICA
+        temporary_output_path = create_temporary_output_path(output_path)
+        sf.write(
+            str(temporary_output_path),
+            final_audio,
+            sample_rate,
+            format='WAV',
+            subtype='PCM_24',
+        )
+        validate_written_output(
+            temporary_output_path,
+            expected_sample_rate=sample_rate,
+            expected_channels=2,
+        )
+        publish_temporary_output(temporary_output_path, output_path)
+        temporary_output_path = None
         
         tipo_processo = "PREVIEW" if is_preview else "MASTER"
         print(f"SUCESSO|{gain_needed + pre_gain_value:.2f}|{target_lufs:.1f}_LUFS|{tipo_processo}|{crest_factor_db:.2f}dB_Dinâmica|Teto_{limiter_ceiling:.1f}dBTP")
 
-    except Exception as e:
-        print(f"ERRO|{str(e)}")
-        sys.exit(1)
+    except Exception:
+        cleanup_temporary_output(temporary_output_path)
+        raise
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv if argv is None else argv
+    if len(args) < 5:
+        print("ERRO|Usage: core_dsp.py INPUT OUTPUT PROFILE INTENSITY [true]")
+        return 2
+
+    is_preview = len(args) == 6 and args[5] == "true"
+
+    try:
+        masterize(args[1], args[2], args[3], args[4], is_preview)
+    except Exception as exc:
+        print(f"ERRO|{exc}")
+        return 1
+
+    return 0
+
 
 if __name__ == "__main__":
-    if len(sys.argv) < 5:
-        sys.exit(1)
-        
-    is_prev = True if len(sys.argv) == 6 and sys.argv[5] == 'true' else False
-    masterize(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], is_prev)
+    sys.exit(main())
