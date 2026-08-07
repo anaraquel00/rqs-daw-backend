@@ -108,7 +108,6 @@ router.post('/process', upload.any(), async (req, res) => {
         console.log(`[DSP ENGINE] Acionando Python para estilo: ${estilo}, intensidade: ${intensidade}, preview: ${isPreview}`);
 
         // --- MAPEAR INTENSIDADE EM PARÂMETROS DECIMAIS PARA OVERRIDES DO DSP ---
-        // Sincroniza perfeitamente a sua interface reativa com os novos motores de transientes e saturação Mid/Side
         let transientIntensity = 0.15;
         let saturationAmount = 0.15;
         
@@ -157,7 +156,7 @@ router.post('/process', upload.any(), async (req, res) => {
             console.error(`[PYTHON STDERR]: ${data.toString()}`);
         });
 
-        // Orquestração atômica de saída baseada em eventos (Evita estouros de concorrência)
+        // Orquestração atômica de saída baseada em eventos (Garante a leitura de todo o JSON de uma vez)
         pythonProcess.on('close', async (code) => {
             console.log(`[DSP ENGINE] Processo Python finalizou com código de saída: ${code}`);
             
@@ -203,19 +202,18 @@ router.post('/process', upload.any(), async (req, res) => {
                     // EXTRAÇÃO CIRÚRGICA DO NOME ORIGINAL
                     let originalName = "RQS_Track";
                     if (s3Key) {
-                        const s3BaseName = path.basename(s3Key); // Ex: "1785411823580_Different Roads..."
+                        const s3BaseName = path.basename(s3Key);
                         originalName = s3BaseName.replace(/^\d+_/, "").replace(/\.[^/.]+$/, "");
                     } else if (uploadedFile) {
                         originalName = uploadedFile.originalname.replace(/\.[^/.]+$/, "");
                     }
 
-                    // 🟢 SANITIZAÇÃO CRÍTICA SRE: Remove acentuação e converte travessões (–, —) em hífens comuns (-) [1.1.2]
-                    // Isso evita totalmente o erro "InvalidArgument: Header value cannot be represented using ISO-8859-1" no S3! [1.1.2]
+                    // SANITIZAÇÃO CRÍTICA SRE: Remove acentuação e hífens especiais contra erros ISO-8859-1
                     const sanitizedOriginalName = originalName
-                        .replace(/[\u2010-\u2015]/g, "-")   // Converte En-Dashes e Em-Dashes em hífens ASCII comuns [1.1.2]
-                        .normalize("NFD")                   // Desmembra caracteres complexos (ã -> a + ~) [1.1.2]
-                        .replace(/[\u0300-\u036f]/g, "")    // Remove os acentos soltos do UTF-8 [1.1.2]
-                        .replace(/[^a-zA-Z0-9\s_,-]/g, "");   // Remove qualquer outro caractere proibido pelo padrão ISO-8859-1 [1.1.2]
+                        .replace(/[\u2010-\u2015]/g, "-")
+                        .normalize("NFD")
+                        .replace(/[\u0300-\u036f]/g, "")
+                        .replace(/[^a-zA-Z0-9\s_,-]/g, "");
 
                     // Nome limpo de estúdio para o download do usuário
                     const cleanMasterName = `RQS_MASTER_${estilo.toUpperCase()}_${sanitizedOriginalName}`;
@@ -236,7 +234,7 @@ router.post('/process', upload.any(), async (req, res) => {
                     const getCommand = new GetObjectCommand({
                         Bucket: BUCKET_NAME,
                         Key: masterS3Key,
-                        ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"` // 🟢 Nome sanitizado e seguro contra falhas ISO-8859-1! [1.1.2]
+                        ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"`
                     });
                     const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
 
@@ -253,11 +251,13 @@ router.post('/process', upload.any(), async (req, res) => {
                     });
                 }
 
-            } catch (s3Err) {
-                console.error("[CRITICAL] Falha ao processar relatório JSON ou exportar para S3:", s3Err);
+            } catch (err) {
+                console.error("[CRITICAL] Falha ao processar relatório ou enviar para S3:", err);
                 if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-                if (!res.headersSent) res.status(500).json({ error: "Erro ao salvar e exportar master do S3." });
+                if (!res.headersSent) {
+                    res.status(500).json({ error: "Erro ao exportar o master.", details: err.message });
+                }
             }
         });
 
