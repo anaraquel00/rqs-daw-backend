@@ -75,10 +75,6 @@ def test_saturate_side_high_frequency_alias_is_below_minus_60_dbc(core_dsp_modul
     assert alias_dbc <= -60.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known creative-DSP defect: transient gain depends on the file-global maximum derivative.",
-)
 def test_restore_transients_is_local_and_not_changed_by_later_peak(core_dsp_module):
     sample_rate = 48_000
     first_index = int(0.20 * sample_rate)

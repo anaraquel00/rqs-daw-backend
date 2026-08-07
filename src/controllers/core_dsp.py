@@ -49,31 +49,48 @@ def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.
 
 def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: float, faccao: str):
     """
-    MÓDULO TRANSIENTE ADAPTATIVO EXTREMAMENTE RÁPIDO:
-    Se a track for ultra-densa e saturada (Hard Techno/Schranz), desativamos o boost
-    para evitar acúmulo de cliques digitais e distorção no limitador [1.2].
+    Apply bounded transient enhancement using a causal local detector.
+
+    The original crest-factor bypass rules and maximum Blue/Red boost amounts
+    are preserved. Transient strength is derived from the positive local rise
+    of the smoothed amplitude envelope relative to that same local envelope,
+    so a later, larger peak cannot retroactively change an earlier transient.
     """
     if (faccao == "red" and crest_factor < 6.5) or crest_factor >= 8.5:
         return signal
-        
-    abs_signal = np.abs(signal)
-    
+
+    signal_array = np.asarray(signal, dtype=np.float32)
+    if signal_array.size == 0:
+        return signal_array.copy()
+
+    abs_signal = np.abs(signal_array.astype(np.float64, copy=False))
+
     time_constant = 0.005
     alpha = 1.0 - np.exp(-1.0 / (time_constant * sample_rate))
-    
+
     b = [alpha]
     a = [1.0, -(1.0 - alpha)]
     envelope = lfilter(b, a, abs_signal)
-    
-    derivative = np.diff(envelope, prepend=0)
-    derivative = np.maximum(0, derivative)  
-    
-    max_deriv = np.max(derivative) + 1e-9
-    normalized_transients = derivative / max_deriv
-    
+
+    derivative = np.diff(envelope, prepend=0.0)
+    derivative = np.maximum(0.0, derivative)
+
+    # Local, causal normalization. The detector is scale-invariant and has no
+    # dependency on a future/global maximum elsewhere in the file.
+    epsilon = np.finfo(np.float64).eps
+    local_reference = np.maximum(envelope, epsilon)
+    normalized_transients = np.divide(
+        derivative,
+        local_reference,
+        out=np.zeros_like(derivative),
+        where=local_reference > epsilon,
+    )
+    normalized_transients = np.clip(normalized_transients, 0.0, 1.0)
+
     boost_val = 0.15 if faccao == "blue" else 0.08
     boost_factor = 1.0 + boost_val * normalized_transients
-    return (signal * boost_factor).astype(np.float32)
+
+    return (signal_array * boost_factor).astype(np.float32)
 
 def saturate_side(side_channel: np.ndarray, sample_rate: float):
     """
