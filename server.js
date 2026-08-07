@@ -57,5 +57,3 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`[RQS MAINFRAME] Módulos operacionais: [DSP] [MIXER] [VIDEO] [STEMS]`);
 });
 
-server.keepAliveTimeout = 120000;
-server.headersTimeout = 120000;
