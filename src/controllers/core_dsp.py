@@ -143,7 +143,7 @@ def calculate_input_pre_gain_db(initial_lufs: float) -> float:
 
     return float(min(8.0, max(-8.0, -14.0 - initial_lufs)))
 
-def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False):
+def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None):
     validated_input = validate_mastering_request(input_path, output_path)
     input_path = str(validated_input.input_path)
     output_path = str(validated_input.output_path)
@@ -238,6 +238,13 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
             target_lufs -= lufs_penalty
             limiter_ceiling = min(limiter_ceiling, -2.0)
             limiter_release = max(limiter_release, 150.0)
+
+
+        # V2: delivery overrides only. Creative voicing is unchanged here.
+        if target_lufs_override is not None:
+            target_lufs = float(target_lufs_override)
+        if limiter_ceiling_override is not None:
+            limiter_ceiling = float(limiter_ceiling_override)
 
         # 6. MATRIZ MID/SIDE E PROCESSADORES DE SINAL INTEGRAIS
         L = audio_data[0, :]

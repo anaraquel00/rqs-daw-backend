@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import inspect
+import pytest
+from src.controllers import core_dsp, mastering_v2
+from src.controllers.mastering_profiles import Atmosphere, Destination, Platform
+
+def test_spotify_plan():
+    p = mastering_v2.build_render_plan_v2(
+        destination="streaming", platform="spotify",
+        atmosphere="thunder", intensity_percent=75)
+    assert (p.target_lufs, p.true_peak_ceiling_dbtp) == (-14.0, -1.2)
+    assert (p.legacy_dsp_style, p.legacy_dsp_intensity) == ("clear_sky", "media")
+
+def test_club_plan():
+    p = mastering_v2.build_render_plan_v2(
+        destination="club", atmosphere="aurora", intensity_percent=25)
+    assert (p.target_lufs, p.true_peak_ceiling_dbtp) == (-10.5, -1.0)
+
+def test_festival_plan():
+    p = mastering_v2.build_render_plan_v2(
+        destination="festival", atmosphere="sunroof", intensity_percent=50)
+    assert (p.target_lufs, p.true_peak_ceiling_dbtp) == (-9.5, -1.0)
+
+@pytest.mark.parametrize("value", [0.0, 50.0, 100.0])
+def test_intensity_is_metadata_only_for_now(value):
+    p = mastering_v2.build_render_plan_v2(
+        destination="club", atmosphere="clear_sky", intensity_percent=value)
+    assert p.request.intensity_percent == value
+    assert p.legacy_dsp_intensity == "media"
+    assert p.target_lufs == -10.5
+
+@pytest.mark.parametrize("atmosphere", list(Atmosphere))
+def test_atmosphere_is_metadata_only_for_now(atmosphere):
+    p = mastering_v2.build_render_plan_v2(
+        destination="streaming", platform="spotify",
+        atmosphere=atmosphere, intensity_percent=50)
+    assert p.request.atmosphere.atmosphere is atmosphere
+    assert p.legacy_dsp_style == "clear_sky"
+    assert p.target_lufs == -14.0
+
+def _capture(monkeypatch):
+    calls = []
+    def fake(*args):
+        calls.append(args)
+        return "ok"
+    monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake)
+    return calls
+
+def test_routes_spotify(monkeypatch):
+    c = _capture(monkeypatch)
+    assert mastering_v2.masterize_v2(
+        "in", "out", destination="streaming", platform="spotify",
+        atmosphere="thunder", intensity_percent=90) == "ok"
+    assert c == [("in", "out", "clear_sky", "media", False, -14.0, -1.2)]
+
+def test_routes_club(monkeypatch):
+    c = _capture(monkeypatch)
+    mastering_v2.masterize_v2(
+        "in", "out", destination="club",
+        atmosphere="aurora", intensity_percent=10)
+    assert c[0][-2:] == (-10.5, -1.0)
+
+def test_routes_festival(monkeypatch):
+    c = _capture(monkeypatch)
+    mastering_v2.masterize_v2(
+        "in", "out", destination="festival",
+        atmosphere="sunroof", intensity_percent=50)
+    assert c[0][-2:] == (-9.5, -1.0)
+
+def test_routes_preview(monkeypatch):
+    c = _capture(monkeypatch)
+    mastering_v2.masterize_v2(
+        "in", "out", destination="club",
+        atmosphere="clear_sky", intensity_percent=50, is_preview=True)
+    assert c[0][4] is True
+
+def test_legacy_signature_stays_compatible():
+    p = list(inspect.signature(core_dsp.masterize).parameters.values())
+    assert [x.name for x in p[:5]] == [
+        "input_path", "output_path", "estilo", "intensidade", "is_preview"]
+    assert p[4].default is False
+    assert p[5].name == "target_lufs_override" and p[5].default is None
+    assert p[6].name == "limiter_ceiling_override" and p[6].default is None
