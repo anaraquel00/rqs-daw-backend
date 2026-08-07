@@ -126,7 +126,7 @@ router.post('/process', upload.any(), async (req, res) => {
 
         const venvPython = '/opt/venv/bin/python3';
         
-        // Formatação refinada de argumentos nomeados compatível com a nova CLI core_dsp.py
+        // Formatação de argumentos nomeados
         const pythonArgs = [
             pythonScriptPath, 
             inputPath, 
@@ -242,10 +242,14 @@ router.post('/process', upload.any(), async (req, res) => {
                     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
 
-                    // Retorna o download seguro do S3 acompanhado do relatório de conformidade técnica para o Angular!
+                    // 🟢 PROGRAMAÇÃO DEFENSIVA SRE: Retorna todas as variações de chaves esperadas pelo Angular!
                     res.status(200).json({ 
                         success: true, 
                         downloadUrl: downloadUrl,
+                        audioProcessed: downloadUrl,       // Chave mapeada diretamente
+                        data: {
+                            audioProcessed: downloadUrl    // Chave mapeada de forma aninhada
+                        },
                         fileName: `${cleanMasterName}.wav`,
                         report: report
                     });
