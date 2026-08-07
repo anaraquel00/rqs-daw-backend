@@ -55,10 +55,6 @@ def test_saturate_side_preserves_zero_side(core_dsp_module):
     assert np.max(np.abs(processed)) == 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known creative-DSP defect: native-rate tanh Side saturation aliases high-frequency harmonics.",
-)
 def test_saturate_side_high_frequency_alias_is_below_minus_60_dbc(core_dsp_module):
     sample_rate = 48_000
     frequency = 15_000.0

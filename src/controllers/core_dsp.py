@@ -3,7 +3,7 @@ import gc
 import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
-from scipy.signal import butter, sosfiltfilt, lfilter
+from scipy.signal import butter, sosfiltfilt, lfilter, resample_poly
 from pedalboard import (
     Pedalboard, Compressor, HighpassFilter, HighShelfFilter, 
     LowShelfFilter, Gain, PeakFilter, Distortion, NoiseGate, LowpassFilter
@@ -77,15 +77,44 @@ def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: flo
 
 def saturate_side(side_channel: np.ndarray, sample_rate: float):
     """
-    SATURAÇÃO HARMÔNICA: Saturação suave não-linear (tangente hiperbólica).
+    Apply gentle high-frequency Side saturation with 4x oversampling.
+
+    The 5 kHz high-passed Side component is oversampled before the tanh
+    non-linearity and polyphase-filtered back to the original sample rate.
+    This keeps the original wet/dry topology while suppressing harmonic
+    fold-back into the audible band.
     """
     sos_hp = butter(2, 5000.0, btype='high', fs=sample_rate, output='sos')
     side_highs = sosfiltfilt(sos_hp, side_channel)
-    
+
     drive = 1.15
-    saturated_highs = np.tanh(side_highs * drive) / drive
-    
-    return (side_channel - side_highs + saturated_highs).astype(np.float32)
+    oversample_factor = 4
+
+    side_highs_oversampled = resample_poly(
+        side_highs.astype(np.float64),
+        oversample_factor,
+        1,
+        padtype='line',
+    )
+    saturated_oversampled = (
+        np.tanh(side_highs_oversampled * drive) / drive
+    )
+    saturated_highs = resample_poly(
+        saturated_oversampled,
+        1,
+        oversample_factor,
+        padtype='line',
+    )
+
+    # Integer 4x round-trip should preserve length. Slice defensively against
+    # any one-sample rounding difference from future resampler changes.
+    saturated_highs = saturated_highs[:side_channel.shape[0]]
+
+    return (
+        side_channel.astype(np.float64)
+        - side_highs.astype(np.float64)
+        + saturated_highs
+    ).astype(np.float32)
 
 def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False):
     validated_input = validate_mastering_request(input_path, output_path)
