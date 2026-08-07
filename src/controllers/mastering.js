@@ -107,23 +107,89 @@ router.post('/process', upload.any(), async (req, res) => {
 
         console.log(`[DSP ENGINE] Acionando Python para estilo: ${estilo}, intensidade: ${intensidade}, preview: ${isPreview}`);
 
+        // --- MAPEAR INTENSIDADE EM PARÂMETROS DECIMAIS PARA OVERRIDES DO DSP ---
+        // Sincroniza perfeitamente a sua interface reativa com os novos motores de transientes e saturação Mid/Side
+        let transientIntensity = 0.15;
+        let saturationAmount = 0.15;
+        
+        if (intensidade === 'suave') {
+            transientIntensity = 0.08;
+            saturationAmount = 0.08;
+        } else if (intensidade === 'forte') {
+            transientIntensity = 0.25;
+            saturationAmount = 0.25;
+        }
+        
+        const customParams = {
+            transient_intensity: transientIntensity,
+            saturation_amount: saturationAmount
+        };
+
         const venvPython = '/opt/venv/bin/python3';
-        const pythonProcess = spawn(venvPython, [
+        
+        // Formatação refinada de argumentos nomeados compatível com a nova CLI core_dsp.py
+        const pythonArgs = [
             pythonScriptPath, 
             inputPath, 
             outputPath, 
-            estilo, 
-            intensidade,
-            isPreview 
-        ]);
+            '--task_id', `task_${Date.now()}`,
+            '--profile', estilo,
+            '--params_json', JSON.stringify(customParams)
+        ];
+        
+        if (isPreview === 'true') {
+            pythonArgs.push('--preview');
+        }
 
+        const pythonProcess = spawn(venvPython, pythonArgs);
+
+        let pythonStdoutOutput = '';
         let pythonErrorOutput = '';
 
-        pythonProcess.stdout.on('data', async (data) => {
-            const output = data.toString().trim();
-            console.log(`[PYTHON STDOUT]: ${output}`);
-            if (output.startsWith('SUCESSO')) {
+        // Coleta o fluxo JSON de relatório final gerado no stdout pelo Python
+        pythonProcess.stdout.on('data', (data) => {
+            pythonStdoutOutput += data.toString();
+        });
+
+        // Desvia todos os logs operacionais informativos do DSP para o console de erro (CloudWatch)
+        pythonProcess.stderr.on('data', (data) => {
+            pythonErrorOutput += data.toString();
+            console.error(`[PYTHON STDERR]: ${data.toString()}`);
+        });
+
+        // Orquestração atômica de saída baseada em eventos (Evita estouros de concorrência)
+        pythonProcess.on('close', async (code) => {
+            console.log(`[DSP ENGINE] Processo Python finalizou com código de saída: ${code}`);
+            
+            if (code !== 0) {
+                console.error(`[CRITICAL] Processo Python falhou. Detalhes: ${pythonErrorOutput}`);
+                if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                 
+                if (!res.headersSent) {
+                    return res.status(500).json({ 
+                        error: 'Falha interna no motor de DSP Python', 
+                        details: pythonErrorOutput 
+                    });
+                }
+                return;
+            }
+
+            try {
+                // Parse seguro do relatório JSON Youlean-class final do stdout
+                const report = JSON.parse(pythonStdoutOutput.trim());
+                
+                if (report.status === 'failed') {
+                    console.error(`[CRITICAL] Motor Python reportou erro de sinal: ${report.error}`);
+                    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+                    
+                    if (!res.headersSent) {
+                        return res.status(500).json({ error: report.error });
+                    }
+                    return;
+                }
+
                 if (isPreview === 'true') {
                     // CASO PREVIEW: Retorna o áudio de 15s direto por binário (Blob)
                     console.log(`[DSP ENGINE] Preview concluído com sucesso! Transmitindo binário direto...`);
@@ -164,54 +230,34 @@ router.post('/process', upload.any(), async (req, res) => {
                         ContentType: "audio/wav"
                     });
 
-                    try {
-                        await s3Client.send(uploadMasterCommand);
-                        console.log(`[DSP ENGINE] Master enviada com sucesso para o S3: ${masterS3Key}`);
+                    await s3Client.send(uploadMasterCommand);
+                    console.log(`[DSP ENGINE] Master enviada com sucesso para o S3: ${masterS3Key}`);
 
-                        const getCommand = new GetObjectCommand({
-                            Bucket: BUCKET_NAME,
-                            Key: masterS3Key,
-                            ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"` // 🟢 Nome sanitizado e seguro contra falhas ISO-8859-1! [1.1.2]
-                        });
-                        const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
+                    const getCommand = new GetObjectCommand({
+                        Bucket: BUCKET_NAME,
+                        Key: masterS3Key,
+                        ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"` // 🟢 Nome sanitizado e seguro contra falhas ISO-8859-1! [1.1.2]
+                    });
+                    const downloadUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 900 });
 
-                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+                    // Higiene compulsória do disco /tmp
+                    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
 
-                        res.status(200).json({ 
-                            success: true, 
-                            downloadUrl: downloadUrl,
-                            fileName: `${cleanMasterName}.wav`
-                        });
-
-                    } catch (s3Err) {
-                        console.error("[CRITICAL] Falha ao enviar ou gerar download URL no S3:", s3Err);
-                        if (!res.headersSent) res.status(500).json({ error: "Erro ao salvar e exportar master do S3." });
-                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-                    }
+                    // Retorna o download seguro do S3 acompanhado do relatório de conformidade técnica para o Angular!
+                    res.status(200).json({ 
+                        success: true, 
+                        downloadUrl: downloadUrl,
+                        fileName: `${cleanMasterName}.wav`,
+                        report: report
+                    });
                 }
-            } else if (output.startsWith('ERRO')) {
-                console.error(`[CRITICAL] Python Reportou Erro: ${output}`);
-                if (!res.headersSent) res.status(500).json({ error: output });
-                if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-            }
-        });
 
-        pythonProcess.stderr.on('data', (data) => {
-            pythonErrorOutput += data.toString();
-            console.error(`[PYTHON STDERR]: ${data.toString()}`);
-        });
-
-        pythonProcess.on('close', (code) => {
-            if (code !== 0) {
-                console.error(`[CRITICAL] Processo Python finalizou com código de erro ${code}`);
+            } catch (s3Err) {
+                console.error("[CRITICAL] Falha ao processar relatório JSON ou exportar para S3:", s3Err);
                 if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-                
-                if (!res.headersSent) {
-                    res.status(500).json({ error: 'Falha interna no motor de DSP Python', details: pythonErrorOutput });
-                }
+                if (!res.headersSent) res.status(500).json({ error: "Erro ao salvar e exportar master do S3." });
             }
         });
 
