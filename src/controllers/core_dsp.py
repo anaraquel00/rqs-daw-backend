@@ -47,20 +47,48 @@ def split_bands(signal: np.ndarray, sample_rate: float, low_cutoff: float = 120.
     
     return low_band.astype(np.float32), mid_band.astype(np.float32), high_band.astype(np.float32)
 
-def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: float, faccao: str):
+def restore_transients(
+    signal: np.ndarray,
+    crest_factor: float,
+    sample_rate: float,
+    faccao: str,
+    amount: float = 1.0,
+    max_boost_override: float | None = None,
+):
     """
     Apply bounded transient enhancement using a causal local detector.
 
-    The original crest-factor bypass rules and maximum Blue/Red boost amounts
-    are preserved. Transient strength is derived from the positive local rise
+    Legacy calls keep the original Blue/Red crest rules and boost amounts.
+    V2 can supply an explicit max_boost_override so transient character no
+    longer has to be selected by the legacy Blue/Red faction.
+
+    Transient strength is derived from the positive local rise
     of the smoothed amplitude envelope relative to that same local envelope,
     so a later, larger peak cannot retroactively change an earlier transient.
     """
-    if (faccao == "red" and crest_factor < 6.5) or crest_factor >= 8.5:
+    amount = float(amount)
+    if not np.isfinite(amount) or not 0.0 <= amount <= 1.0:
+        raise ValueError("Transient amount must be finite and between 0.0 and 1.0.")
+
+    if max_boost_override is None:
+        max_boost = 0.15 if faccao == "blue" else 0.08
+        use_legacy_red_low_crest_bypass = faccao == "red"
+    else:
+        max_boost = float(max_boost_override)
+        if not np.isfinite(max_boost) or not 0.0 <= max_boost <= 0.25:
+            raise ValueError(
+                "Transient max boost override must be finite and between 0.0 and 0.25."
+            )
+        use_legacy_red_low_crest_bypass = False
+
+    if (
+        (use_legacy_red_low_crest_bypass and crest_factor < 6.5)
+        or crest_factor >= 8.5
+    ):
         return signal
 
     signal_array = np.asarray(signal, dtype=np.float32)
-    if signal_array.size == 0:
+    if signal_array.size == 0 or amount == 0.0:
         return signal_array.copy()
 
     abs_signal = np.abs(signal_array.astype(np.float64, copy=False))
@@ -87,7 +115,7 @@ def restore_transients(signal: np.ndarray, crest_factor: float, sample_rate: flo
     )
     normalized_transients = np.clip(normalized_transients, 0.0, 1.0)
 
-    boost_val = 0.15 if faccao == "blue" else 0.08
+    boost_val = max_boost * amount
     boost_factor = 1.0 + boost_val * normalized_transients
 
     return (signal_array * boost_factor).astype(np.float32)
@@ -164,7 +192,7 @@ def calculate_input_pre_gain_db(initial_lufs: float) -> float:
 
     return float(min(8.0, max(-8.0, -14.0 - initial_lufs)))
 
-def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0):
+def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0, transient_amount: float = 1.0, transient_max_boost_override: float | None = None):
     validated_input = validate_mastering_request(input_path, output_path)
     input_path = str(validated_input.input_path)
     output_path = str(validated_input.output_path)
@@ -273,7 +301,14 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         mid = ((L + R) * 0.5).astype(np.float32)
         side = ((L - R) * 0.5).astype(np.float32)
         
-        mid = restore_transients(mid, crest_factor_db, sample_rate, faccao)
+        mid = restore_transients(
+            mid,
+            crest_factor_db,
+            sample_rate,
+            faccao,
+            transient_amount,
+            transient_max_boost_override,
+        )
         side = saturate_side(side, sample_rate, side_saturation_amount)
         
         hp_mid = Pedalboard([HighpassFilter(cutoff_frequency_hz=30)])

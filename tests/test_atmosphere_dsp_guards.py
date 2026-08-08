@@ -113,14 +113,30 @@ def test_side_lowpass_is_not_selected_by_blue_red_faction():
     assert '13500.0 if faccao == "red" else 15000.0' not in source
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known migration debt: transient character is still selected by Blue/Red faction.",
-)
-def test_transient_character_is_not_selected_by_blue_red_faction():
-    source = _core_source()
-    assert "restore_transients(mid, crest_factor_db, sample_rate, faccao)" not in source
+def test_transient_character_is_controlled_by_v2_not_blue_red_faction(monkeypatch):
+    calls = []
 
+    def fake_masterize(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "ok"
+
+    monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake_masterize)
+
+    result = mastering_v2.masterize_v2(
+        "input.wav",
+        "output.wav",
+        destination="club",
+        atmosphere="thunder",
+        intensity_percent=50,
+        requested_lufs=-11.0,
+    )
+
+    assert result == "ok"
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert kwargs == {}
+    assert args[8] == 0.5
+    assert args[9] == 0.15
 
 def test_side_saturation_is_controlled_by_v2_intensity(monkeypatch):
     calls = []
@@ -145,3 +161,5 @@ def test_side_saturation_is_controlled_by_v2_intensity(monkeypatch):
     args, kwargs = calls[0]
     assert kwargs == {}
     assert args[7] == 0.5
+    assert args[8] == 0.5
+    assert args[9] == 0.15

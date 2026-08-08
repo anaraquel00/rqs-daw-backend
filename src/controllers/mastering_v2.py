@@ -66,4 +66,6 @@ def masterize_v2(input_path, output_path, *, destination, atmosphere,
         plan.target_lufs,
         plan.true_peak_ceiling_dbtp,
         plan.request.character_amount,
+        plan.request.character_amount,
+        0.15,
     )
