@@ -41,7 +41,8 @@ def test_atmosphere_is_metadata_only_for_now(atmosphere):
 
 def _capture(monkeypatch):
     calls = []
-    def fake(*args):
+    def fake(*args, **kwargs):
+        assert kwargs == {"high_cleanup_amount": 0.0}
         calls.append(args)
         return "ok"
     monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake)

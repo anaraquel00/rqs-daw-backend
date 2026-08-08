@@ -94,14 +94,31 @@ def test_zero_intensity_final_render_uses_delivery_only_path(monkeypatch):
     assert kwargs["release_ms"] == mastering_v2.DELIVERY_ONLY_RELEASE_MS
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known migration debt: fixed high-band LPF/cuts are still part of the default creative path.",
-)
-def test_default_creative_path_has_no_fixed_15500_hz_high_cleanup():
-    source = _core_source()
-    assert "hf_cutoff = 15500.0" not in source
-    assert "PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.0" not in source
+def test_v2_bypasses_legacy_fixed_high_cleanup(monkeypatch):
+    calls = []
+
+    def fake_masterize(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "ok"
+
+    monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake_masterize)
+
+    for atmosphere in ("thunder", "clear_sky"):
+        result = mastering_v2.masterize_v2(
+            "input.wav",
+            "output.wav",
+            destination="club",
+            atmosphere=atmosphere,
+            intensity_percent=50,
+            requested_lufs=-11.0,
+        )
+        assert result == "ok"
+
+    assert len(calls) == 2
+
+    for args, kwargs in calls:
+        assert kwargs == {"high_cleanup_amount": 0.0}
+        assert args[10] == 15000.0
 
 
 def test_side_lowpass_is_controlled_by_v2_not_blue_red_faction(monkeypatch):
@@ -127,7 +144,7 @@ def test_side_lowpass_is_controlled_by_v2_not_blue_red_faction(monkeypatch):
     assert len(calls) == 2
 
     for args, kwargs in calls:
-        assert kwargs == {}
+        assert kwargs == {"high_cleanup_amount": 0.0}
         assert args[10] == 15000.0
 
 
@@ -152,7 +169,7 @@ def test_transient_character_is_controlled_by_v2_not_blue_red_faction(monkeypatc
     assert result == "ok"
     assert len(calls) == 1
     args, kwargs = calls[0]
-    assert kwargs == {}
+    assert kwargs == {"high_cleanup_amount": 0.0}
     assert args[8] == 0.5
     assert args[9] == 0.15
 
@@ -177,7 +194,7 @@ def test_side_saturation_is_controlled_by_v2_intensity(monkeypatch):
     assert result == "ok"
     assert len(calls) == 1
     args, kwargs = calls[0]
-    assert kwargs == {}
+    assert kwargs == {"high_cleanup_amount": 0.0}
     assert args[7] == 0.5
     assert args[8] == 0.5
     assert args[9] == 0.15

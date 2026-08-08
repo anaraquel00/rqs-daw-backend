@@ -182,6 +182,61 @@ def saturate_side(
 
     return (dry + amount * (wet - dry)).astype(np.float32)
 
+def apply_high_cleanup(
+    signal: np.ndarray,
+    sample_rate: float,
+    faccao: str,
+    crest_factor: float,
+    amount: float = 1.0,
+) -> np.ndarray:
+    """
+    Apply the legacy high-band cleanup with an explicit wet/dry amount.
+
+    amount=0.0 is an exact dry bypass.
+    amount=1.0 preserves the historical cleanup path.
+    Intermediate values interpolate between dry and legacy-cleaned audio.
+    """
+    amount = float(amount)
+    if not np.isfinite(amount) or not 0.0 <= amount <= 1.0:
+        raise ValueError(
+            "High cleanup amount must be finite and between 0.0 and 1.0."
+        )
+
+    signal_array = np.asarray(signal, dtype=np.float32)
+
+    if signal_array.size == 0 or amount == 0.0:
+        return signal_array.copy()
+
+    if faccao == "red" and crest_factor < 7.5:
+        clean_highs = Pedalboard([
+            LowpassFilter(cutoff_frequency_hz=13800.0),
+            PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0),
+            PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5),
+            PeakFilter(cutoff_frequency_hz=8000.0, gain_db=-1.5, q=1.0),
+        ])
+    else:
+        clean_highs = Pedalboard([
+            LowpassFilter(cutoff_frequency_hz=15500.0),
+            PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.0, q=1.5),
+            PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.0, q=2.0),
+        ])
+
+    wet = clean_highs(
+        signal_array[np.newaxis, :],
+        sample_rate,
+    )[0]
+
+    if amount == 1.0:
+        return wet.astype(np.float32, copy=False)
+
+    dry64 = signal_array.astype(np.float64)
+    wet64 = wet.astype(np.float64)
+
+    return (
+        dry64 + amount * (wet64 - dry64)
+    ).astype(np.float32)
+
+
 def calculate_input_pre_gain_db(initial_lufs: float) -> float:
     """Return the legacy input pre-gain without applying a full-mix gate."""
     if not np.isfinite(initial_lufs):
@@ -192,7 +247,7 @@ def calculate_input_pre_gain_db(initial_lufs: float) -> float:
 
     return float(min(8.0, max(-8.0, -14.0 - initial_lufs)))
 
-def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0, transient_amount: float = 1.0, transient_max_boost_override: float | None = None, side_lowpass_cutoff_override: float | None = None):
+def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0, transient_amount: float = 1.0, transient_max_boost_override: float | None = None, side_lowpass_cutoff_override: float | None = None, high_cleanup_amount: float = 1.0):
     validated_input = validate_mastering_request(input_path, output_path)
     input_path = str(validated_input.input_path)
     output_path = str(validated_input.output_path)
@@ -361,23 +416,13 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
         mid_low_processed = comp_low(mid_low[np.newaxis, :], sample_rate)[0]
         mid_mid_processed = comp_mid(mid_mid[np.newaxis, :], sample_rate)[0]
         
-        if faccao == "red" and crest_factor_db < 7.5:
-            hf_cutoff = 13800.0  
-            clean_highs = Pedalboard([
-                LowpassFilter(cutoff_frequency_hz=hf_cutoff),
-                PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.5, q=2.0), 
-                PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.5, q=1.5), 
-                PeakFilter(cutoff_frequency_hz=8000.0, gain_db=-1.5, q=1.0)
-            ])
-        else:
-            hf_cutoff = 15500.0
-            clean_highs = Pedalboard([
-                LowpassFilter(cutoff_frequency_hz=hf_cutoff),
-                PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.0, q=1.5),
-                PeakFilter(cutoff_frequency_hz=4500.0, gain_db=-1.0, q=2.0)
-            ])
-            
-        mid_high_filtered = clean_highs(mid_high[np.newaxis, :], sample_rate)[0]
+        mid_high_filtered = apply_high_cleanup(
+            mid_high,
+            sample_rate,
+            faccao,
+            crest_factor_db,
+            high_cleanup_amount,
+        )
         mid_high_processed = comp_high(mid_high_filtered[np.newaxis, :], sample_rate)[0]
 
         # Recombinação

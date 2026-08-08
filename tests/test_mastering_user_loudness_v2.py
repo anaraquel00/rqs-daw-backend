@@ -68,7 +68,8 @@ def test_soundcloud_loud_rejected_for_spotify():
 
 def _capture(monkeypatch):
     calls = []
-    def fake(*args):
+    def fake(*args, **kwargs):
+        assert kwargs == {"high_cleanup_amount": 0.0}
         calls.append(args)
         return "ok"
     monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake)

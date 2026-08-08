@@ -69,4 +69,5 @@ def masterize_v2(input_path, output_path, *, destination, atmosphere,
         plan.request.character_amount,
         0.15,
         15000.0,
+        high_cleanup_amount=0.0,
     )
