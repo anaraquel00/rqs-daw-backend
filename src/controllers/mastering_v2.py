@@ -68,4 +68,5 @@ def masterize_v2(input_path, output_path, *, destination, atmosphere,
         plan.request.character_amount,
         plan.request.character_amount,
         0.15,
+        15000.0,
     )

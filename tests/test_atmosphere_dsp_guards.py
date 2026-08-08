@@ -104,13 +104,31 @@ def test_default_creative_path_has_no_fixed_15500_hz_high_cleanup():
     assert "PeakFilter(cutoff_frequency_hz=6500.0, gain_db=-2.0" not in source
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known migration debt: Side low-pass cutoff is still selected from Blue/Red faction.",
-)
-def test_side_lowpass_is_not_selected_by_blue_red_faction():
-    source = _core_source()
-    assert '13500.0 if faccao == "red" else 15000.0' not in source
+def test_side_lowpass_is_controlled_by_v2_not_blue_red_faction(monkeypatch):
+    calls = []
+
+    def fake_masterize(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "ok"
+
+    monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake_masterize)
+
+    for atmosphere in ("thunder", "clear_sky"):
+        result = mastering_v2.masterize_v2(
+            "input.wav",
+            "output.wav",
+            destination="club",
+            atmosphere=atmosphere,
+            intensity_percent=50,
+            requested_lufs=-11.0,
+        )
+        assert result == "ok"
+
+    assert len(calls) == 2
+
+    for args, kwargs in calls:
+        assert kwargs == {}
+        assert args[10] == 15000.0
 
 
 def test_transient_character_is_controlled_by_v2_not_blue_red_faction(monkeypatch):

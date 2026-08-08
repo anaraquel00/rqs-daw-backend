@@ -192,7 +192,7 @@ def calculate_input_pre_gain_db(initial_lufs: float) -> float:
 
     return float(min(8.0, max(-8.0, -14.0 - initial_lufs)))
 
-def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0, transient_amount: float = 1.0, transient_max_boost_override: float | None = None):
+def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, is_preview: bool = False, target_lufs_override: float | None = None, limiter_ceiling_override: float | None = None, side_saturation_amount: float = 1.0, transient_amount: float = 1.0, transient_max_boost_override: float | None = None, side_lowpass_cutoff_override: float | None = None):
     validated_input = validate_mastering_request(input_path, output_path)
     input_path = str(validated_input.input_path)
     output_path = str(validated_input.output_path)
@@ -403,10 +403,21 @@ def masterize(input_path: str, output_path: str, estilo: str, intensidade: str, 
 
 
         # 9. PROCESSAMENTO ESPACIAL (SIDE) SEGURO
-        # Blue Team mantém o estéreo amplo. Red Team blinda as laterais contra chiados de fase em 13.5kHz [1.2.2].
+        # Legacy keeps the historical Red/Blue cutoff split.
+        # V2 supplies an explicit cutoff so Side LPF policy is not selected
+        # by the legacy faction.
+        if side_lowpass_cutoff_override is None:
+            side_lowpass_cutoff_hz = 13500.0 if faccao == "red" else 15000.0
+        else:
+            side_lowpass_cutoff_hz = float(side_lowpass_cutoff_override)
+            if not np.isfinite(side_lowpass_cutoff_hz) or side_lowpass_cutoff_hz <= 0.0:
+                raise ValueError(
+                    "Side low-pass cutoff override must be finite and greater than 0 Hz."
+                )
+
         board_side = Pedalboard([
             HighpassFilter(cutoff_frequency_hz=150.0),
-            LowpassFilter(cutoff_frequency_hz=13500.0 if faccao == "red" else 15000.0)
+            LowpassFilter(cutoff_frequency_hz=side_lowpass_cutoff_hz)
         ])
         
         rms_side_db = get_band_rms_db(side)

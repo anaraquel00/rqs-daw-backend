@@ -81,10 +81,11 @@ def test_routes_custom_club(monkeypatch):
         "in", "out", destination="club",
         atmosphere="clear_sky", intensity_percent=50,
         requested_lufs=-11.0)
-    assert calls[0][-5:-3] == (-11.0, -1.0)
+    assert calls[0][-6:-4] == (-11.0, -1.0)
+    assert abs(calls[0][-4] - 0.5) < 1e-12
     assert abs(calls[0][-3] - 0.5) < 1e-12
-    assert abs(calls[0][-2] - 0.5) < 1e-12
-    assert abs(calls[0][-1] - 0.15) < 1e-12
+    assert abs(calls[0][-2] - 0.15) < 1e-12
+    assert abs(calls[0][-1] - 15000.0) < 1e-12
 
 
 def test_routes_soundcloud_loud(monkeypatch):
@@ -93,7 +94,8 @@ def test_routes_soundcloud_loud(monkeypatch):
         "in", "out", destination="streaming", platform="soundcloud",
         soundcloud_mode="loud", atmosphere="clear_sky",
         intensity_percent=50, requested_lufs=-10.5)
-    assert calls[0][-5:-3] == (-10.5, -2.0)
+    assert calls[0][-6:-4] == (-10.5, -2.0)
+    assert abs(calls[0][-4] - 0.5) < 1e-12
     assert abs(calls[0][-3] - 0.5) < 1e-12
-    assert abs(calls[0][-2] - 0.5) < 1e-12
-    assert abs(calls[0][-1] - 0.15) < 1e-12
+    assert abs(calls[0][-2] - 0.15) < 1e-12
+    assert abs(calls[0][-1] - 15000.0) < 1e-12
