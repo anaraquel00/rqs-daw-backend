@@ -1,63 +1,144 @@
 // src/controllers/payment.js
+
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
-// Inicializa o Stripe
-const stripe = require('stripe')('sk_test_51RvPs80vU1EZjW1G9ox6LBQpKUuljEAuDM4kWHz6ZQX4Bu9haOz8n8MamX11gq8afDJtdgo6SWRnouynUldNgCOD00C9LnVFkH');
 
-// Inicializa o cliente administrativo do Supabase usando a sua SERVICE_ROLE_KEY
+const stripe = require('stripe')(
+  process.env.STRIPE_SECRET_KEY
+);
+
 const supabaseAdmin = createClient(
-  'https://ucearnthodrltkvkmhit.supabase.co',
-  'sb_secret_zzpzxNivmpASr9P23IWU3A_qFgq6hpV',
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SECRET_KEY,
   {
     auth: {
-      persistSession: false // Prática recomendada em ambientes SRE/Serverless
+      persistSession: false
     }
   }
 );
 
-// Segredo do Webhook gerado na aba Webhooks do seu painel da Stripe (ex: whsec_...) [1.1.8]
-const endpointSecret = 'whsec_rNEiVvlF4REHTG4Ehs0oXj3VssOx2c9A'; 
+const endpointSecret =
+  process.env.STRIPE_WEBHOOK_SECRET;
 
-// 🟢 CORREÇÃO 1: Adicionado o "async" na rota para permitir o controle de sincronia
-router.post('/stripe-webhook', async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  let event;
+router.post(
+  '/stripe-webhook',
+  async (req, res) => {
 
-  try {
-    // 🟢 SEGURANÇA SRE: Usa o buffer bruto salvo no req.rawBody para validar a assinatura! [1]
-    event = stripe.webhooks.constructEvent(req.rawBody, sig, endpointSecret);
-  } catch (err) {
-    console.error(`[STRIPE ERROR] Falha ao validar assinatura do Webhook:`, err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
+    const sig =
+      req.headers['stripe-signature'];
 
-  // Escuta a aprovação do pagamento do checkout de assinatura [1.1.8]
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const userEmail = session.customer_details.email;
-
-    console.log(`[STRIPE PAY] Assinatura aprovada com sucesso para: ${userEmail}`);
+    let event;
 
     try {
-      // 🟢 CORREÇÃO 2: Usa o "await" para forçar a Lambda a esperar a gravação no Postgres terminar! [1.1.2]
-      const { error } = await supabaseAdmin
-        .from('profiles')
-        .update({ role: 'premium' })
-        .eq('email', userEmail);
 
-      if (error) {
-        console.error("[CRITICAL] Falha ao atualizar papel no Supabase:", error);
-      } else {
-        console.log(`[STRIPE PAY] Usuário ${userEmail} promovido para PREMIUM no banco de dados!`);
-      }
-    } catch (dbError) {
-      console.error("[CRITICAL] Erro de conexão com o banco Supabase:", dbError);
+      event =
+        stripe.webhooks.constructEvent(
+          req.rawBody,
+          sig,
+          endpointSecret
+        );
+
+    } catch (err) {
+
+      console.error(
+        '[STRIPE ERROR] Falha ao validar assinatura do webhook:',
+        err.message
+      );
+
+      return res
+        .status(400)
+        .send(
+          `Webhook Error: ${err.message}`
+        );
     }
-  }
 
-  // 🟢 Só responde 200 após garantir que a atualização assíncrona foi finalizada! [1.1.2]
-  res.status(200).json({ received: true });
-});
+
+    if (
+      event.type ===
+      'checkout.session.completed'
+    ) {
+
+      const session =
+        event.data.object;
+
+      const userEmail =
+        session.customer_details?.email
+          ?.trim()
+          ?.toLowerCase();
+
+
+      if (!userEmail) {
+
+        console.error(
+          '[STRIPE PAY] Checkout concluído sem e-mail do usuário.'
+        );
+
+        return res
+          .status(400)
+          .json({
+            received: false
+          });
+      }
+
+
+      try {
+
+        const {
+          error
+        } =
+          await supabaseAdmin
+            .from('profiles')
+            .update({
+              role: 'premium'
+            })
+            .eq(
+              'email',
+              userEmail
+            );
+
+
+        if (error) {
+
+          console.error(
+            '[CRITICAL] Falha ao atualizar perfil:',
+            error
+          );
+
+          return res
+            .status(500)
+            .json({
+              received: false
+            });
+        }
+
+
+        console.log(
+          '[STRIPE PAY] Perfil promovido para PREMIUM.'
+        );
+
+      } catch (dbError) {
+
+        console.error(
+          '[CRITICAL] Erro de conexão com Supabase:',
+          dbError
+        );
+
+        return res
+          .status(500)
+          .json({
+            received: false
+          });
+      }
+    }
+
+
+    return res
+      .status(200)
+      .json({
+        received: true
+      });
+  }
+);
 
 module.exports = router;

@@ -107,37 +107,19 @@ router.post('/process', upload.any(), async (req, res) => {
 
         console.log(`[DSP ENGINE] Acionando Python para estilo: ${estilo}, intensidade: ${intensidade}, preview: ${isPreview}`);
 
-        // --- MAPEAR INTENSIDADE EM PARÂMETROS DECIMAIS PARA OVERRIDES DO DSP ---
-        let transientIntensity = 0.15;
-        let saturationAmount = 0.15;
-        
-        if (intensidade === 'suave') {
-            transientIntensity = 0.08;
-            saturationAmount = 0.08;
-        } else if (intensidade === 'forte') {
-            transientIntensity = 0.25;
-            saturationAmount = 0.25;
-        }
-        
-        const customParams = {
-            transient_intensity: transientIntensity,
-            saturation_amount: saturationAmount
-        };
-
         const venvPython = '/opt/venv/bin/python3';
         
-        // Formatação de argumentos nomeados
+        // 🟢 CORREÇÃO: Formatação de argumentos POSICIONAIS exatos exigidos pelo core_dsp.py do Kris Mig!
         const pythonArgs = [
             pythonScriptPath, 
             inputPath, 
             outputPath, 
-            '--task_id', `task_${Date.now()}`,
-            '--profile', estilo,
-            '--params_json', JSON.stringify(customParams)
+            estilo, 
+            intensidade
         ];
         
         if (isPreview === 'true') {
-            pythonArgs.push('--preview');
+            pythonArgs.push('true');
         }
 
         const pythonProcess = spawn(venvPython, pythonArgs);
@@ -145,18 +127,16 @@ router.post('/process', upload.any(), async (req, res) => {
         let pythonStdoutOutput = '';
         let pythonErrorOutput = '';
 
-        // Coleta o fluxo JSON de relatório final gerado no stdout pelo Python
         pythonProcess.stdout.on('data', (data) => {
             pythonStdoutOutput += data.toString();
         });
 
-        // Desvia todos os logs operacionais informativos do DSP para o console de erro (CloudWatch)
         pythonProcess.stderr.on('data', (data) => {
             pythonErrorOutput += data.toString();
             console.error(`[PYTHON STDERR]: ${data.toString()}`);
         });
 
-        // Orquestração atômica de saída baseada em eventos (Garante a leitura de todo o JSON de uma vez)
+        // Orquestração de término baseada em eventos (Lê o "SUCESSO|..." ou "ERRO|...")
         pythonProcess.on('close', async (code) => {
             console.log(`[DSP ENGINE] Processo Python finalizou com código de saída: ${code}`);
             
@@ -175,16 +155,15 @@ router.post('/process', upload.any(), async (req, res) => {
             }
 
             try {
-                // Parse seguro do relatório JSON Youlean-class final do stdout
-                const report = JSON.parse(pythonStdoutOutput.trim());
+                const outputString = pythonStdoutOutput.trim();
                 
-                if (report.status === 'failed') {
-                    console.error(`[CRITICAL] Motor Python reportou erro de sinal: ${report.error}`);
+                if (outputString.startsWith('ERRO')) {
+                    console.error(`[CRITICAL] Motor Python reportou erro: ${outputString}`);
                     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                     
                     if (!res.headersSent) {
-                        return res.status(500).json({ error: report.error });
+                        return res.status(500).json({ error: outputString });
                     }
                     return;
                 }
@@ -242,16 +221,15 @@ router.post('/process', upload.any(), async (req, res) => {
                     if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
                     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
 
-                    // 🟢 PROGRAMAÇÃO DEFENSIVA SRE: Retorna todas as variações de chaves esperadas pelo Angular!
+                    // Retorna o download seguro do S3
                     res.status(200).json({ 
                         success: true, 
                         downloadUrl: downloadUrl,
-                        audioProcessed: downloadUrl,       // Chave mapeada diretamente
+                        audioProcessed: downloadUrl,       // Chave mapeada diretamente para o EKG
                         data: {
                             audioProcessed: downloadUrl    // Chave mapeada de forma aninhada
                         },
-                        fileName: `${cleanMasterName}.wav`,
-                        report: report
+                        fileName: `${cleanMasterName}.wav`
                     });
                 }
 
