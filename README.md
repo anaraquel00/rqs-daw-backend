@@ -15,14 +15,14 @@ Para contornar as restrições físicas das funções Lambda e otimizar custos, 
 
 ---
 
-## 🐍 O Motor DSP Adaptativo (Python `core_dsp.py`)
+## 🐍 Motor de Masterização V2 (Python `mastering_v2.py` + `core_dsp.py`)
 
-O reator acústico em Python realiza um polimento de masterização cirúrgica sintonizado especificamente para as características dinâmicas do Suno 5.5:
+A arquitetura V2 separa o contrato de entrega e a orquestração do processamento criativo legado. `mastering_v2.py` constrói o plano de renderização a partir do destino, plataforma, Atmosphere e intensidade; `core_dsp.py` permanece como núcleo de compatibilidade para o processamento criativo quando o caráter é maior que zero.
 
-*   **ZLP (Zero Latency Preview) em Milissegundos:** Ao receber uma solicitação de teste (`is_preview = true`), o script usa o `sf.info` para ler apenas os metadados em 1ms e instrui o leitor a carregar estritamente apenas os 15s centrais diretamente do S3/HD [1]. O processamento dinâmico cai de 25s para insignificantes **300 milissegundos**!
-*   **Complexidade $O(N)$ (lfilter):** Substituímos convoluções pesadas $O(N \cdot M)$ de envelope por filtros IIR de primeira ordem usando `scipy.signal.lfilter`, permitindo que o script processe faixas inteiras em menos de 4 segundos de CPU [1].
-*   **STFT Harshness Tamer:** Executa Transformadas Rápidas de Fourier em janelas de tempo de 46ms para identificar picos de ressonância estática na faixa de $2.5\text{ kHz}$ a $5.0\text{ kHz}$ [1.1.2]. O sistema aplica atenuações cirúrgicas reativas nas frequências agressivas [1.1.2, 1.2.2].
-*   **Aceleração Harmônica do Side:** Aplica uma função de transferência não-linear tangente hiperbólica (`tanh`) nas frequências laterais acima de $5\text{ kHz}$, gerando brilho sutil e largura estéreo analógica artificial [1.2, 1.2.2].
+*   **Preview V2 consistente com o render final:** o V2 seleciona os **15 segundos centrais** da fonte. Com intensidade de **0%** (`character_amount == 0.0`), o preview usa somente o finalizador de loudness/true-peak (*delivery-only*), sem entrar no núcleo criativo. Acima de 0%, o mesmo segmento pré-cortado segue para `core_dsp.py` mantendo `is_preview=True`. O WAV temporário em ponto flutuante é removido ao final do processamento.
+*   **Intensidade contínua 0–100%:** a intensidade do pedido é convertida em `character_amount`. No V2 atual, esse valor escala diretamente a saturação do Side e a restauração de transientes; os demais blocos preservados da rota de compatibilidade usam a configuração V2 fixa. Em 0%, o núcleo criativo é completamente ignorado e somente o processamento de entrega é executado.
+*   **Atmosphere desacoplada do legado:** Clear Sky, Thunder, Sunroof e Aurora permanecem como perfis do pedido. No DSP V2 atual, todos usam a mesma rota de compatibilidade (`clear_sky` / `media` / `blue`), evitando que os novos nomes de Atmosphere reativem regras históricas Red/Blue.
+*   **Política V2 explícita no núcleo de compatibilidade:** saturação do Side e restauração de transientes seguem `character_amount`; o Side usa HPF de **100 Hz** e LPF de **15 kHz**; High Cleanup e High Compression ficam desativados; compressores Mid e Side ficam em bypass. O contrato de loudness e true-peak continua resolvido pela política de entrega (destino/plataforma, `soundcloud_mode` quando aplicável e `requested_lufs` dentro da faixa permitida), independentemente dessa rota criativa.
 
 ---
 
@@ -56,4 +56,12 @@ Timeout: 30 segundos (Múltipla margem de segurança) [1].
 Ephemeral Storage (/tmp): 4096 MB (4 GB, ideal para o tráfego pesado de stems e WAVs) [1].
 IAM Role: rqs-daw-backend-role-6rwy1xo5 (com políticas AWSLambdaBasicExecutionRole e AmazonS3FullAccess ativas) [1].
 
+<!-- RQS_DOCS_INDEX_BEGIN -->
+## RQS engineering documentation
 
+- [Architecture](docs/ARCHITECTURE.md)
+- [Optimization baseline and decisions](docs/OPTIMIZATION.md)
+- [Cleanup inventory](docs/CLEANUP.md)
+
+Project-process truth remains in the external `PROJECT_STATE.md` checkpoint used by the RQS CORE Mastering workflow.
+<!-- RQS_DOCS_INDEX_END -->
