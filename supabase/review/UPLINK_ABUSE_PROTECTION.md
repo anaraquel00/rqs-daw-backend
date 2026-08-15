@@ -1,0 +1,67 @@
+# RQS Uplink — Abuse Protection
+
+The public `rqs-router` is intentionally unauthenticated because it must accept
+normal browser redirects. Public access must not grant direct database writes.
+
+## V3.2 controls
+
+- only `GET` requests are eligible for tracking;
+- `HEAD`, prefetch/prerender and known preview/crawler user agents redirect
+  without consuming analytics or quota;
+- the Edge Function uses `service_role` only server-side;
+- the RPC is executable only by `service_role`;
+- raw client addresses and user-agent strings are never stored;
+- only `cf-connecting-ip` from the Supabase Edge gateway is accepted;
+  generic `x-real-ip` and `x-forwarded-for` headers are ignored;
+- a salted SHA-256 fingerprint is generated in the Edge Function;
+- one row per link/fingerprint and a conditional database upsert atomically
+  deduplicate repeats during the preceding rolling 60 seconds across all Edge
+  Function isolates;
+- quota checking and counter updates remain in the same database transaction;
+- invalid source, fingerprint, role, counters or ownership state fails closed;
+- tracking failures never block a valid redirect.
+
+`?src=` is an attribution hint supplied by the link creator. It is useful when
+social applications remove the `Referer` header, but it is not cryptographic
+proof that the visitor came from that platform.
+
+## Required secret
+
+Configure a high-entropy `UPLINK_TRACKING_SALT` of at least 32 characters only
+in the Edge Function environment. Do not reuse a public Supabase key and never
+commit the value.
+
+Without a sufficiently strong salt, a platform-provided client address or a
+normal browser User-Agent, the router redirects but deliberately skips
+tracking.
+
+Every redirect response uses `Cache-Control: no-store` so a browser or
+intermediary cannot reuse a cached redirect and silently bypass the tracking
+path.
+
+## Retention
+
+Successful requests create deduplication rows containing only:
+
+- link UUID;
+- salted fingerprint hash;
+- timestamp of the last accepted click.
+
+The RPC removes rows older than 48 hours for the active link. A scheduled daily
+maintenance job should also delete all rows older than 48 hours so inactive
+links do not retain stale hashes.
+
+Example maintenance statement (review before scheduling):
+
+```sql
+delete from public.rqs_uplink_click_dedup
+where last_counted_at < statement_timestamp() - interval '48 hours';
+```
+
+## Residual risk
+
+No public click counter can perfectly distinguish a person from a sufficiently
+realistic automated browser. The rolling 60-second deduplication window limits
+simple repeats but does not prevent distributed abuse using many addresses or
+user agents. Monitor `trackingError`, `trackingDeduplicated` and request volume,
+then add infrastructure-level rate limiting if abuse is observed.
