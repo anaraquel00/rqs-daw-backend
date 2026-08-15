@@ -129,3 +129,19 @@ from public.profiles p
 join public.rqs_uplinks u
   on u.user_id = p.id
 where u.custom_slug = 'flower-newworld';
+
+-- =========================================================
+-- DEPENDÊNCIAS / REFERÊNCIAS À RPC ANTIGA
+-- BEFORE DROP
+-- =========================================================
+
+select
+  n.nspname as schema_name,
+  p.proname,
+  pg_get_function_identity_arguments(p.oid) as args,
+  pg_get_functiondef(p.oid) as definition
+from pg_proc p
+join pg_namespace n
+  on n.oid = p.pronamespace
+where pg_get_functiondef(p.oid)
+  ilike '%increment_uplink_clicks%';

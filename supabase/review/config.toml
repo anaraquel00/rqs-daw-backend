@@ -1,0 +1,6 @@
+# REVIEW ONLY
+# Intended destination after approval:
+# supabase/config.toml
+
+[functions.rqs-router]
+verify_jwt = false

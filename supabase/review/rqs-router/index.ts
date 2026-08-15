@@ -1,199 +1,247 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const ALLOWED_SOURCES: Record<string, string> = {
-  instagram: 'source_instagram',
-  tiktok: 'source_tiktok',
-  facebook: 'source_facebook',
-  youtube: 'source_youtube',
-  direct: 'source_direct'
+const SOURCE_MAP: Record<string, string> = {
+  instagram: "source_instagram",
+  tiktok: "source_tiktok",
+  facebook: "source_facebook",
+  youtube: "source_youtube",
+  direct: "source_direct",
 };
 
 function detectSource(req: Request, url: URL): string {
-  const explicitSource =
-    url.searchParams.get('src')?.toLowerCase();
+  // 1. Explicit source (?src=instagram)
+  const src = url.searchParams
+    .get("src")
+    ?.trim()
+    .toLowerCase();
 
-  if (
-    explicitSource &&
-    ALLOWED_SOURCES[explicitSource]
-  ) {
-    return ALLOWED_SOURCES[explicitSource];
+  if (src && SOURCE_MAP[src]) {
+    return SOURCE_MAP[src];
   }
 
+  // 2. Referer fallback
   const referer =
-    req.headers.get('referer')?.toLowerCase() || '';
+    req.headers.get("referer")?.toLowerCase() ?? "";
 
-  if (referer.includes('instagram')) {
-    return 'source_instagram';
+  if (referer.includes("instagram")) {
+    return "source_instagram";
   }
 
-  if (referer.includes('tiktok')) {
-    return 'source_tiktok';
-  }
-
-  if (
-    referer.includes('facebook') ||
-    referer.includes('fb.com')
-  ) {
-    return 'source_facebook';
+  if (referer.includes("tiktok")) {
+    return "source_tiktok";
   }
 
   if (
-    referer.includes('youtube') ||
-    referer.includes('youtu.be')
+    referer.includes("facebook") ||
+    referer.includes("fb.com")
   ) {
-    return 'source_youtube';
+    return "source_facebook";
   }
 
+  if (
+    referer.includes("youtube") ||
+    referer.includes("youtu.be")
+  ) {
+    return "source_youtube";
+  }
+
+  // 3. User-Agent fallback
   const userAgent =
-    req.headers.get('user-agent')?.toLowerCase() || '';
+    req.headers.get("user-agent")?.toLowerCase() ?? "";
 
-  if (userAgent.includes('instagram')) {
-    return 'source_instagram';
+  if (userAgent.includes("instagram")) {
+    return "source_instagram";
   }
 
-  if (userAgent.includes('tiktok')) {
-    return 'source_tiktok';
+  if (userAgent.includes("tiktok")) {
+    return "source_tiktok";
   }
 
-  if (userAgent.includes('facebook')) {
-    return 'source_facebook';
+  if (userAgent.includes("facebook")) {
+    return "source_facebook";
   }
 
-  if (userAgent.includes('youtube')) {
-    return 'source_youtube';
+  if (userAgent.includes("youtube")) {
+    return "source_youtube";
   }
 
-  return 'source_direct';
+  // 4. Unknown source
+  return "source_direct";
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
 
-  const pathParts =
-    url.pathname
-      .split('/')
-      .filter(Boolean);
+  const pathParts = url.pathname
+    .split("/")
+    .filter(Boolean);
 
   const slug =
     pathParts[pathParts.length - 1];
 
-  if (!slug || slug === 'rqs-router') {
+  // ---------------------------------------------------------
+  // HEALTH CHECK
+  // ---------------------------------------------------------
+
+  if (!slug || slug === "rqs-router") {
     return new Response(
       JSON.stringify({
-        status: 'RQS Uplink Router Online'
+        status: "RQS Uplink Router Online",
       }),
       {
         status: 200,
         headers: {
-          'Content-Type':
-            'application/json'
-        }
-      }
+          "Content-Type": "application/json",
+        },
+      },
     );
   }
 
+  // ---------------------------------------------------------
+  // ENVIRONMENT
+  // ---------------------------------------------------------
+
   const supabaseUrl =
-    Deno.env.get('SUPABASE_URL')!;
+    Deno.env.get("SUPABASE_URL");
 
   const serviceRoleKey =
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-  const supabase =
-    createClient(
-      supabaseUrl,
-      serviceRoleKey
-    );
-
-  console.log(
-    '[RQS UPLINK] request',
-    { slug }
-  );
-
-  const {
-    data,
-    error: lookupError
-  } =
-    await supabase
-      .from('rqs_uplinks')
-      .select('id, target_url')
-      .eq('custom_slug', slug)
-      .single();
-
-  if (
-    lookupError ||
-    !data
-  ) {
+  if (!supabaseUrl || !serviceRoleKey) {
     console.error(
-      '[RQS UPLINK] lookupError',
+      "[RQS UPLINK] configurationError",
       {
         slug,
-        message:
-          lookupError?.message
-      }
+        missingSupabaseUrl: !supabaseUrl,
+        missingServiceRoleKey: !serviceRoleKey,
+      },
     );
 
     return new Response(
       JSON.stringify({
-        error:
-          'Uplink Target Not Found'
+        error: "Router Configuration Error",
+      }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  }
+
+  const supabase = createClient(
+    supabaseUrl,
+    serviceRoleKey,
+  );
+
+  console.log(
+    "[RQS UPLINK] request",
+    { slug },
+  );
+
+  // ---------------------------------------------------------
+  // LOOKUP
+  // ---------------------------------------------------------
+
+  const {
+    data,
+    error: lookupError,
+  } = await supabase
+    .from("rqs_uplinks")
+    .select("id, target_url")
+    .eq("custom_slug", slug)
+    .single();
+
+  if (lookupError || !data) {
+    console.error(
+      "[RQS UPLINK] lookupError",
+      {
+        slug,
+        message:
+          lookupError?.message ??
+          "UPLINK_NOT_FOUND",
+      },
+    );
+
+    return new Response(
+      JSON.stringify({
+        error: "Uplink Target Not Found",
       }),
       {
         status: 404,
         headers: {
-          'Content-Type':
-            'application/json'
-        }
-      }
+          "Content-Type": "application/json",
+        },
+      },
     );
   }
+
+  // ---------------------------------------------------------
+  // SOURCE DETECTION
+  // ---------------------------------------------------------
 
   const sourceCol =
     detectSource(req, url);
 
+  // ---------------------------------------------------------
+  // TRACKING ATTEMPT
+  // ---------------------------------------------------------
+
   console.log(
-    '[RQS UPLINK] trackingAttempt',
+    "[RQS UPLINK] trackingAttempt",
     {
       slug,
       id: data.id,
-      source: sourceCol
-    }
+      source: sourceCol,
+    },
   );
 
+  // ---------------------------------------------------------
+  // ATOMIC TRACKING RPC
+  // ---------------------------------------------------------
+
   const {
-    error: trackingError
-  } =
-    await supabase.rpc(
-      'increment_uplink_clicks',
-      {
-        link_id: data.id,
-        source_col: sourceCol
-      }
-    );
+    error: trackingError,
+  } = await supabase.rpc(
+    "increment_uplink_clicks",
+    {
+      link_id: data.id,
+      source_col: sourceCol,
+    },
+  );
+
+  // ---------------------------------------------------------
+  // TRACKING RESULT
+  // ---------------------------------------------------------
 
   if (trackingError) {
     console.error(
-      '[RQS UPLINK] trackingError',
+      "[RQS UPLINK] trackingError",
       {
         slug,
         id: data.id,
         source: sourceCol,
-        message:
-          trackingError.message
-      }
+        message: trackingError.message,
+      },
     );
   } else {
     console.log(
-      '[RQS UPLINK] trackingSuccess',
+      "[RQS UPLINK] trackingSuccess",
       {
         slug,
         id: data.id,
-        source: sourceCol
-      }
+        source: sourceCol,
+      },
     );
   }
 
+  // ---------------------------------------------------------
+  // REDIRECT MUST SURVIVE TRACKING FAILURE
+  // ---------------------------------------------------------
+
   return Response.redirect(
     data.target_url,
-    302
+    302,
   );
 });

@@ -1,115 +1,167 @@
 -- =========================================================
--- RQS UPLINK TRACKING - TEST PLAN
--- REVIEW ONLY
--- NÃO EXECUTAR EM PRODUÇÃO SEM APROVAÇÃO
+-- TEST A — ACL OLD SIGNATURE
+-- BEFORE MIGRATION
 -- =========================================================
 
--- ---------------------------------------------------------
--- TESTE 1 - ACL nova função
--- Esperado:
--- anon = false
--- authenticated = false
--- service_role = true
--- ---------------------------------------------------------
+select
+  has_function_privilege(
+    'anon',
+    'public.increment_uplink_clicks(uuid,text,uuid)',
+    'EXECUTE'
+  ) as old_anon,
+
+  has_function_privilege(
+    'authenticated',
+    'public.increment_uplink_clicks(uuid,text,uuid)',
+    'EXECUTE'
+  ) as old_authenticated,
+
+  has_function_privilege(
+    'service_role',
+    'public.increment_uplink_clicks(uuid,text,uuid)',
+    'EXECUTE'
+  ) as old_service_role;
+
+
+-- =========================================================
+-- TEST B — ACL NEW SIGNATURE
+-- POST MIGRATION
+--
+-- expected:
+-- anon=false
+-- authenticated=false
+-- service_role=true
+-- =========================================================
 
 select
   has_function_privilege(
     'anon',
     'public.increment_uplink_clicks(uuid,text)',
     'EXECUTE'
-  ) as anon_can_execute,
+  ) as new_anon,
 
   has_function_privilege(
     'authenticated',
     'public.increment_uplink_clicks(uuid,text)',
     'EXECUTE'
-  ) as authenticated_can_execute,
+  ) as new_authenticated,
 
   has_function_privilege(
     'service_role',
     'public.increment_uplink_clicks(uuid,text)',
     'EXECUTE'
-  ) as service_role_can_execute;
+  ) as new_service_role;
 
--- ---------------------------------------------------------
--- TESTE 2 - source inválido
--- Esperado: INVALID_SOURCE
--- Nenhum contador alterado.
--- ---------------------------------------------------------
+  -- =========================================================
+-- TEST C — NULL SOURCE
+-- EXPECTED: INVALID_SOURCE
+-- ZERO COUNTERS CHANGED
+-- =========================================================
 
 -- select public.increment_uplink_clicks(
---   '<TEST_LINK_UUID>'::uuid,
---   'source_invalid'
+--   '<TEST_LINK_ID>'::uuid,
+--   null
 -- );
 
--- ---------------------------------------------------------
--- TESTE 3 - link inexistente
--- Esperado: UPLINK_NOT_FOUND
--- ---------------------------------------------------------
+
+-- =========================================================
+-- TEST D — INVALID SOURCE
+-- EXPECTED: INVALID_SOURCE
+-- =========================================================
+
+-- select public.increment_uplink_clicks(
+--   '<TEST_LINK_ID>'::uuid,
+--   'source_fake'
+-- );
+
+
+-- =========================================================
+-- TEST E — UNKNOWN LINK
+-- EXPECTED: UPLINK_NOT_FOUND
+-- =========================================================
 
 -- select public.increment_uplink_clicks(
 --   '00000000-0000-0000-0000-000000000000'::uuid,
 --   'source_direct'
 -- );
 
--- ---------------------------------------------------------
--- TESTE 4 - source_instagram
--- Antes e depois:
--- clicks +1
--- source_instagram +1
--- demais source_* inalterados
--- monthly_clicks +1
--- ---------------------------------------------------------
-
--- select public.increment_uplink_clicks(
---   '<TEST_LINK_UUID>'::uuid,
---   'source_instagram'
--- );
-
--- ---------------------------------------------------------
--- TESTE 5 - quota excedida
--- Preparar em ambiente controlado:
--- role = free
--- monthly_clicks = click_quota
+-- =========================================================
+-- TEST F — FREE QUOTA EXCEEDED
 --
--- Esperado:
+-- BUSINESS RULE:
+-- Free = 700 tracked clicks/month
+-- Premium = unlimited tracking
+-- Redirect = unlimited for both plans
+--
+-- PRE:
+-- role = 'free'
+-- monthly_clicks = 700
+-- click_quota = 700
+--
+-- EXPECTED:
 -- CLICK_QUOTA_EXCEEDED
--- nenhum contador alterado.
--- ---------------------------------------------------------
+-- clicks unchanged
+-- source_* unchanged
+-- monthly_clicks unchanged
+-- redirect still succeeds
+-- =========================================================
 
--- ---------------------------------------------------------
--- TESTE 6 - Premium
--- role = premium
+-- =========================================================
+-- TEST G — PREMIUM BUSINESS RULE
+--
+-- BUSINESS RULE:
+-- Premium tracking = unlimited
+--
+-- PRE:
+-- role = 'premium'
 -- monthly_clicks >= click_quota
 --
--- Esperado:
--- tracking permitido.
--- ---------------------------------------------------------
+-- EXPECTED:
+-- RPC succeeds
+-- clicks +1
+-- selected source +1
+-- monthly_clicks +1
+-- redirect succeeds
+-- =========================================================
 
--- ---------------------------------------------------------
--- TESTE 7 - Concorrência
+-- =========================================================
+-- TEST H — CONCURRENCY
 --
--- Preparar perfil Free com:
+-- PRE:
+-- role='free'
 -- click_quota - monthly_clicks = 1
 --
--- Disparar várias RPCs simultâneas.
+-- Run several service_role RPC calls concurrently.
 --
--- Esperado:
--- exatamente 1 sucesso
--- demais = CLICK_QUOTA_EXCEEDED
+-- EXPECTED:
+-- exactly 1 success
+-- remaining calls => CLICK_QUOTA_EXCEEDED
 --
--- Confirmar:
--- clicks +1 total
--- monthly_clicks +1 total
--- source selecionado +1 total
--- ---------------------------------------------------------
+-- FINAL:
+-- clicks increased exactly by 1
+-- selected source increased exactly by 1
+-- monthly_clicks increased exactly by 1
+-- =========================================================
 
--- ---------------------------------------------------------
--- TESTE 8 - Redirect
+-- =========================================================
+-- TEST I — REDIRECT AFTER TRACKING ERROR
 --
--- Mesmo se a RPC retornar:
--- CLICK_QUOTA_EXCEEDED
--- ou erro interno de tracking,
+-- Router test, not pure SQL.
 --
--- o rqs-router deve continuar retornando redirect 302.
--- ---------------------------------------------------------
+-- Force quota exceeded / tracking error.
+--
+-- EXPECTED:
+-- structured trackingError in logs
+-- HTTP redirect still reaches target_url
+-- no tracking counters changed
+-- =========================================================
+
+-- =========================================================
+-- TEST J — POST ROLLBACK
+--
+-- EXPECTED:
+-- only old (uuid,text,uuid) contract restored
+-- original ACL restored
+-- public SELECT policy restored
+-- router source restored from index.before.ts
+-- =========================================================
