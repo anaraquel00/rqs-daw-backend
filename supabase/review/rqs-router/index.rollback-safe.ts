@@ -3,7 +3,22 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 function jsonResponse(body: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function redirectResponse(targetUrl: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: targetUrl,
+      "Cache-Control": "no-store, private",
+      Pragma: "no-cache",
+      "Referrer-Policy": "no-referrer",
+    },
   });
 }
 
@@ -60,5 +75,5 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   console.log("[RQS UPLINK] rollbackRedirect", { slug, id: data.id });
-  return Response.redirect(data.target_url, 302);
+  return redirectResponse(data.target_url);
 });

@@ -72,6 +72,27 @@ begin
   ) then
     raise exception 'TEST_FAIL: owner-only SELECT policy is missing';
   end if;
+
+  if (
+    select count(*)
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'rqs_uplinks'
+      and cmd = 'SELECT'
+  ) <> 1 then
+    raise exception 'TEST_FAIL: unexpected additional SELECT policy exists';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.routine_privileges
+    where routine_schema = 'public'
+      and routine_name = 'increment_uplink_clicks'
+      and grantee in ('PUBLIC', 'anon', 'authenticated')
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'TEST_FAIL: public application role has explicit EXECUTE';
+  end if;
 end;
 $acl$;
 

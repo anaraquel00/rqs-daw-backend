@@ -16,8 +16,10 @@ export type TrackingDecision =
       | "method"
       | "prefetch"
       | "automated-client"
+      | "missing-user-agent"
       | "missing-client-address"
-      | "missing-fingerprint-salt";
+      | "missing-fingerprint-salt"
+      | "weak-fingerprint-salt";
   };
 
 export type TrackingSkipDecision = Exclude<
@@ -43,6 +45,21 @@ const AUTOMATED_CLIENT_PATTERN = new RegExp(
   "i",
 );
 
+function isDomainOrSubdomain(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function getRefererHostname(req: Request): string {
+  const referer = req.headers.get("referer");
+  if (!referer) return "";
+
+  try {
+    return new URL(referer).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
 export function detectSource(req: Request, url: URL): SourceColumn {
   // `src` is a campaign attribution hint, not trusted proof of origin.
   const explicitSource = url.searchParams.get("src")?.trim().toLowerCase();
@@ -53,13 +70,23 @@ export function detectSource(req: Request, url: URL): SourceColumn {
     return SOURCE_MAP[explicitSource as keyof typeof SOURCE_MAP];
   }
 
-  const referer = req.headers.get("referer")?.toLowerCase() ?? "";
-  if (referer.includes("instagram")) return "source_instagram";
-  if (referer.includes("tiktok")) return "source_tiktok";
-  if (referer.includes("facebook") || referer.includes("fb.com")) {
+  const refererHostname = getRefererHostname(req);
+  if (isDomainOrSubdomain(refererHostname, "instagram.com")) {
+    return "source_instagram";
+  }
+  if (isDomainOrSubdomain(refererHostname, "tiktok.com")) {
+    return "source_tiktok";
+  }
+  if (
+    isDomainOrSubdomain(refererHostname, "facebook.com") ||
+    isDomainOrSubdomain(refererHostname, "fb.com")
+  ) {
     return "source_facebook";
   }
-  if (referer.includes("youtube") || referer.includes("youtu.be")) {
+  if (
+    isDomainOrSubdomain(refererHostname, "youtube.com") ||
+    isDomainOrSubdomain(refererHostname, "youtu.be")
+  ) {
     return "source_youtube";
   }
 
@@ -91,7 +118,11 @@ export function trackingDecision(req: Request): TrackingDecision {
     return { track: false, reason: "prefetch" };
   }
 
-  const userAgent = req.headers.get("user-agent") ?? "";
+  const userAgent = req.headers.get("user-agent")?.trim() ?? "";
+  if (!userAgent) {
+    return { track: false, reason: "missing-user-agent" };
+  }
+
   if (AUTOMATED_CLIENT_PATTERN.test(userAgent)) {
     return { track: false, reason: "automated-client" };
   }
@@ -100,14 +131,21 @@ export function trackingDecision(req: Request): TrackingDecision {
 }
 
 export function getClientAddress(req: Request): string | null {
-  const directAddress = req.headers.get("cf-connecting-ip") ??
-    req.headers.get("x-real-ip");
+  // Trust only headers supplied by the platform gateway. Do not use a raw
+  // X-Forwarded-For fallback because a public caller may be able to inject or
+  // prepend values and bypass deduplication.
+  for (const header of ["cf-connecting-ip", "x-real-ip"]) {
+    const value = req.headers.get(header)?.trim();
+    if (
+      value &&
+      value.length <= 128 &&
+      !/[\u0000-\u001f\u007f]/.test(value)
+    ) {
+      return value;
+    }
+  }
 
-  if (directAddress?.trim()) return directAddress.trim();
-
-  const forwardedFor = req.headers.get("x-forwarded-for");
-  const firstAddress = forwardedFor?.split(",")[0]?.trim();
-  return firstAddress || null;
+  return null;
 }
 
 export async function createTrackingFingerprint(
@@ -118,13 +156,16 @@ export async function createTrackingFingerprint(
   if (!salt) {
     return { track: false, reason: "missing-fingerprint-salt" };
   }
+  if (salt.length < 32) {
+    return { track: false, reason: "weak-fingerprint-salt" };
+  }
 
   const clientAddress = getClientAddress(req);
   if (!clientAddress) {
     return { track: false, reason: "missing-client-address" };
   }
 
-  const userAgent = req.headers.get("user-agent") ?? "unknown";
+  const userAgent = (req.headers.get("user-agent") ?? "unknown").slice(0, 512);
   const input = new TextEncoder().encode(
     `${salt}\u0000${linkId}\u0000${clientAddress}\u0000${userAgent}`,
   );
@@ -134,4 +175,16 @@ export async function createTrackingFingerprint(
     .join("");
 
   return { fingerprint };
+}
+
+export function redirectResponse(targetUrl: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: targetUrl,
+      "Cache-Control": "no-store, private",
+      Pragma: "no-cache",
+      "Referrer-Policy": "no-referrer",
+    },
+  });
 }

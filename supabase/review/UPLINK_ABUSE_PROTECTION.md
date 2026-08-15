@@ -11,6 +11,8 @@ normal browser redirects. Public access must not grant direct database writes.
 - the Edge Function uses `service_role` only server-side;
 - the RPC is executable only by `service_role`;
 - raw client addresses and user-agent strings are never stored;
+- only platform gateway address headers (`cf-connecting-ip`, then `x-real-ip`)
+  are accepted; caller-controlled `x-forwarded-for` is ignored;
 - a salted SHA-256 fingerprint is generated in the Edge Function;
 - a database primary key atomically deduplicates the same link/fingerprint in a
   one-minute window across all Edge Function isolates;
@@ -24,11 +26,17 @@ proof that the visitor came from that platform.
 
 ## Required secret
 
-Configure a high-entropy `UPLINK_TRACKING_SALT` only in the Edge Function
-environment. Do not reuse a public Supabase key and never commit the value.
+Configure a high-entropy `UPLINK_TRACKING_SALT` of at least 32 characters only
+in the Edge Function environment. Do not reuse a public Supabase key and never
+commit the value.
 
-Without the salt or a client address, the router redirects but deliberately
-skips tracking.
+Without a sufficiently strong salt, a platform-provided client address or a
+normal browser User-Agent, the router redirects but deliberately skips
+tracking.
+
+Every redirect response uses `Cache-Control: no-store` so a browser or
+intermediary cannot reuse a cached redirect and silently bypass the tracking
+path.
 
 ## Retention
 

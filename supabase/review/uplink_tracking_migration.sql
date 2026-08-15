@@ -25,6 +25,41 @@ begin
     raise exception 'DEDUP_TABLE_ALREADY_EXISTS';
   end if;
 
+  if not exists (
+    select 1
+    from pg_class as c
+    join pg_namespace as n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname = 'rqs_uplinks'
+      and c.relkind in ('r', 'p')
+      and c.relrowsecurity
+  ) then
+    raise exception 'RQS_UPLINKS_RLS_NOT_ENABLED';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies as p
+    where p.schemaname = 'public'
+      and p.tablename = 'rqs_uplinks'
+      and p.policyname = 'Enable read access for all users'
+      and p.cmd = 'SELECT'
+      and 'public' = any(p.roles)
+  ) then
+    raise exception 'EXPECTED_PUBLIC_SELECT_POLICY_NOT_FOUND';
+  end if;
+
+  if exists (
+    select 1
+    from pg_policies as p
+    where p.schemaname = 'public'
+      and p.tablename = 'rqs_uplinks'
+      and p.cmd = 'SELECT'
+      and p.policyname <> 'Enable read access for all users'
+  ) then
+    raise exception 'UNEXPECTED_RQS_UPLINKS_SELECT_POLICY';
+  end if;
+
   if exists (
     select 1
     from public.profiles as p
@@ -143,7 +178,8 @@ begin
   select u.user_id
     into v_user_id
   from public.rqs_uplinks as u
-  where u.id = link_id;
+  where u.id = link_id
+  for no key update;
 
   if not found or v_user_id is null then
     raise exception 'UPLINK_NOT_FOUND';

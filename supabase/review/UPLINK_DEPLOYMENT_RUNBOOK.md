@@ -9,7 +9,8 @@ run SQL automatically.
 2. Database backup/restore point confirmed.
 3. Cloudflare/Git integration classified as preview-only or disabled for this
    review branch.
-4. `UPLINK_TRACKING_SALT` configured as an Edge Function secret.
+4. A high-entropy `UPLINK_TRACKING_SALT` of at least 32 characters configured
+   as an Edge Function secret.
 5. Router type-check and unit tests pass.
 6. Migration and rollback reviewed by two people.
 
@@ -20,6 +21,8 @@ run SQL automatically.
    - Before the SQL migration, its V3 RPC call will fail safely.
    - Lookup and redirect continue through the server-side service-role client.
 3. Verify health and one redirect without expecting a counter change.
+   - Confirm the Edge Function receives `cf-connecting-ip` or `x-real-ip`.
+   - Confirm the response contains `Cache-Control: no-store, private`.
 4. Execute `uplink_tracking_migration.sql` once.
 5. Execute `uplink_tracking_tests.sql`; it must finish with `ROLLBACK` and no
    exception.

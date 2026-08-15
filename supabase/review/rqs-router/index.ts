@@ -2,13 +2,17 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   createTrackingFingerprint,
   detectSource,
+  redirectResponse,
   trackingDecision,
 } from "./tracking.ts";
 
 function jsonResponse(body: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
   });
 }
 
@@ -87,7 +91,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       id: data.id,
       reason: decision.reason,
     });
-    return Response.redirect(data.target_url, 302);
+    return redirectResponse(data.target_url);
   }
 
   const fingerprintResult = await createTrackingFingerprint(
@@ -102,7 +106,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       id: data.id,
       reason: fingerprintResult.reason,
     });
-    return Response.redirect(data.target_url, 302);
+    return redirectResponse(data.target_url);
   }
 
   const sourceCol = detectSource(req, url);
@@ -143,7 +147,7 @@ export async function handleRequest(req: Request): Promise<Response> {
     });
   }
 
-  return Response.redirect(data.target_url, 302);
+  return redirectResponse(data.target_url);
 }
 
 if (import.meta.main) {
