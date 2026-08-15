@@ -1,38 +1,59 @@
 # RQS Uplink — Abuse Protection
 
-## Current V2 protection
+The public `rqs-router` is intentionally unauthenticated because it must accept
+normal browser redirects. Public access must not grant direct database writes.
 
-The public `rqs-router` is intentionally unauthenticated.
+## V3 controls
 
-The database enforces:
+- only `GET` requests are eligible for tracking;
+- `HEAD`, prefetch/prerender and known preview/crawler user agents redirect
+  without consuming analytics or quota;
+- the Edge Function uses `service_role` only server-side;
+- the RPC is executable only by `service_role`;
+- raw client addresses and user-agent strings are never stored;
+- a salted SHA-256 fingerprint is generated in the Edge Function;
+- a database primary key atomically deduplicates the same link/fingerprint in a
+  one-minute window across all Edge Function isolates;
+- quota checking and counter updates remain in the same database transaction;
+- invalid source, fingerprint, role, counters or ownership state fails closed;
+- tracking failures never block a valid redirect.
 
-- one validated tracking RPC;
-- service_role-only EXECUTE;
-- Free monthly quota;
-- atomic quota locking;
-- source allowlist.
+`?src=` is an attribution hint supplied by the link creator. It is useful when
+social applications remove the `Referer` header, but it is not cryptographic
+proof that the visitor came from that platform.
 
-## Remaining abuse risk
+## Required secret
 
-A third party can repeatedly invoke a public Uplink URL and artificially consume
-the link owner's Free quota.
+Configure a high-entropy `UPLINK_TRACKING_SALT` only in the Edge Function
+environment. Do not reuse a public Supabase key and never commit the value.
 
-Application-local in-memory rate limiting is not sufficient because Edge
-Functions can run across multiple isolates/instances.
+Without the salt or a client address, the router redirects but deliberately
+skips tracking.
 
-## Proposed next control
+## Retention
 
-Add a distributed rate limiter / deduplication layer before invoking the
-tracking RPC.
+Successful requests create deduplication rows containing only:
 
-Candidate policy:
+- link UUID;
+- salted fingerprint hash;
+- one-minute window timestamp;
+- creation timestamp.
 
-- key: hash(link_id + client fingerprint)
-- short window: 30–60 seconds
-- repeated request inside the window:
-  - redirect normally;
-  - do not increment analytics/quota.
+The RPC removes rows older than 48 hours for the active link. A scheduled daily
+maintenance job should also delete all rows older than 48 hours so inactive
+links do not retain stale hashes.
 
-No raw IP should be persisted.
+Example maintenance statement (review before scheduling):
 
-This control must be reviewed separately before production deployment.
+```sql
+delete from public.rqs_uplink_click_dedup
+where created_at < statement_timestamp() - interval '48 hours';
+```
+
+## Residual risk
+
+No public click counter can perfectly distinguish a person from a sufficiently
+realistic automated browser. The one-minute deduplication window limits simple
+repeats but does not prevent distributed abuse using many addresses or user
+agents. Monitor `trackingError`, `trackingDeduplicated` and request volume, then
+add infrastructure-level rate limiting if abuse is observed.

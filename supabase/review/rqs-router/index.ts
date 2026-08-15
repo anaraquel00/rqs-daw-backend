@@ -1,247 +1,151 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import {
+  createTrackingFingerprint,
+  detectSource,
+  trackingDecision,
+} from "./tracking.ts";
 
-const SOURCE_MAP: Record<string, string> = {
-  instagram: "source_instagram",
-  tiktok: "source_tiktok",
-  facebook: "source_facebook",
-  youtube: "source_youtube",
-  direct: "source_direct",
-};
-
-function detectSource(req: Request, url: URL): string {
-  // 1. Explicit source (?src=instagram)
-  const src = url.searchParams
-    .get("src")
-    ?.trim()
-    .toLowerCase();
-
-  if (src && SOURCE_MAP[src]) {
-    return SOURCE_MAP[src];
-  }
-
-  // 2. Referer fallback
-  const referer =
-    req.headers.get("referer")?.toLowerCase() ?? "";
-
-  if (referer.includes("instagram")) {
-    return "source_instagram";
-  }
-
-  if (referer.includes("tiktok")) {
-    return "source_tiktok";
-  }
-
-  if (
-    referer.includes("facebook") ||
-    referer.includes("fb.com")
-  ) {
-    return "source_facebook";
-  }
-
-  if (
-    referer.includes("youtube") ||
-    referer.includes("youtu.be")
-  ) {
-    return "source_youtube";
-  }
-
-  // 3. User-Agent fallback
-  const userAgent =
-    req.headers.get("user-agent")?.toLowerCase() ?? "";
-
-  if (userAgent.includes("instagram")) {
-    return "source_instagram";
-  }
-
-  if (userAgent.includes("tiktok")) {
-    return "source_tiktok";
-  }
-
-  if (userAgent.includes("facebook")) {
-    return "source_facebook";
-  }
-
-  if (userAgent.includes("youtube")) {
-    return "source_youtube";
-  }
-
-  // 4. Unknown source
-  return "source_direct";
+function jsonResponse(body: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
-Deno.serve(async (req: Request): Promise<Response> => {
+function getSlug(url: URL): string | null {
+  const pathParts = url.pathname.split("/").filter(Boolean);
+  const slug = pathParts[pathParts.length - 1];
+  return !slug || slug === "rqs-router" ? null : slug;
+}
+
+function isAllowedTarget(targetUrl: string): boolean {
+  try {
+    const protocol = new URL(targetUrl).protocol;
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+export async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
+  const slug = getSlug(url);
 
-  const pathParts = url.pathname
-    .split("/")
-    .filter(Boolean);
-
-  const slug =
-    pathParts[pathParts.length - 1];
-
-  // ---------------------------------------------------------
-  // HEALTH CHECK
-  // ---------------------------------------------------------
-
-  if (!slug || slug === "rqs-router") {
-    return new Response(
-      JSON.stringify({
-        status: "RQS Uplink Router Online",
-      }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      },
-    );
+  if (!slug) {
+    return jsonResponse({ status: "RQS Uplink Router Online" }, 200);
   }
 
-  // ---------------------------------------------------------
-  // ENVIRONMENT
-  // ---------------------------------------------------------
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return new Response(null, {
+      status: 405,
+      headers: { Allow: "GET, HEAD" },
+    });
+  }
 
-  const supabaseUrl =
-    Deno.env.get("SUPABASE_URL");
-
-  const serviceRoleKey =
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
-    console.error(
-      "[RQS UPLINK] configurationError",
-      {
-        slug,
-        missingSupabaseUrl: !supabaseUrl,
-        missingServiceRoleKey: !serviceRoleKey,
-      },
-    );
-
-    return new Response(
-      JSON.stringify({
-        error: "Router Configuration Error",
-      }),
-      {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    console.error("[RQS UPLINK] configurationError", {
+      slug,
+      missingSupabaseUrl: !supabaseUrl,
+      missingServiceRoleKey: !serviceRoleKey,
+    });
+    return jsonResponse({ error: "Router Configuration Error" }, 500);
   }
 
-  const supabase = createClient(
-    supabaseUrl,
-    serviceRoleKey,
-  );
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
-  console.log(
-    "[RQS UPLINK] request",
-    { slug },
-  );
+  console.log("[RQS UPLINK] request", { slug, method: req.method });
 
-  // ---------------------------------------------------------
-  // LOOKUP
-  // ---------------------------------------------------------
-
-  const {
-    data,
-    error: lookupError,
-  } = await supabase
+  const { data, error: lookupError } = await supabase
     .from("rqs_uplinks")
     .select("id, target_url")
     .eq("custom_slug", slug)
     .single();
 
   if (lookupError || !data) {
-    console.error(
-      "[RQS UPLINK] lookupError",
-      {
-        slug,
-        message:
-          lookupError?.message ??
-          "UPLINK_NOT_FOUND",
-      },
-    );
-
-    return new Response(
-      JSON.stringify({
-        error: "Uplink Target Not Found",
-      }),
-      {
-        status: 404,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    console.error("[RQS UPLINK] lookupError", {
+      slug,
+      code: lookupError?.code,
+      message: lookupError?.message ?? "UPLINK_NOT_FOUND",
+    });
+    return jsonResponse({ error: "Uplink Target Not Found" }, 404);
   }
 
-  // ---------------------------------------------------------
-  // SOURCE DETECTION
-  // ---------------------------------------------------------
+  if (!isAllowedTarget(data.target_url)) {
+    console.error("[RQS UPLINK] invalidTarget", { slug, id: data.id });
+    return jsonResponse({ error: "Invalid Uplink Target" }, 500);
+  }
 
-  const sourceCol =
-    detectSource(req, url);
-
-  // ---------------------------------------------------------
-  // TRACKING ATTEMPT
-  // ---------------------------------------------------------
-
-  console.log(
-    "[RQS UPLINK] trackingAttempt",
-    {
+  const decision = trackingDecision(req);
+  if (!decision.track) {
+    console.log("[RQS UPLINK] trackingSkipped", {
       slug,
       id: data.id,
-      source: sourceCol,
-    },
+      reason: decision.reason,
+    });
+    return Response.redirect(data.target_url, 302);
+  }
+
+  const fingerprintResult = await createTrackingFingerprint(
+    req,
+    data.id,
+    Deno.env.get("UPLINK_TRACKING_SALT"),
   );
 
-  // ---------------------------------------------------------
-  // ATOMIC TRACKING RPC
-  // ---------------------------------------------------------
+  if (!("fingerprint" in fingerprintResult)) {
+    console.error("[RQS UPLINK] trackingSkipped", {
+      slug,
+      id: data.id,
+      reason: fingerprintResult.reason,
+    });
+    return Response.redirect(data.target_url, 302);
+  }
 
-  const {
-    error: trackingError,
-  } = await supabase.rpc(
+  const sourceCol = detectSource(req, url);
+  console.log("[RQS UPLINK] trackingAttempt", {
+    slug,
+    id: data.id,
+    source: sourceCol,
+  });
+
+  const { data: tracked, error: trackingError } = await supabase.rpc(
     "increment_uplink_clicks",
     {
       link_id: data.id,
       source_col: sourceCol,
+      request_fingerprint: fingerprintResult.fingerprint,
     },
   );
 
-  // ---------------------------------------------------------
-  // TRACKING RESULT
-  // ---------------------------------------------------------
-
   if (trackingError) {
-    console.error(
-      "[RQS UPLINK] trackingError",
-      {
-        slug,
-        id: data.id,
-        source: sourceCol,
-        message: trackingError.message,
-      },
-    );
+    console.error("[RQS UPLINK] trackingError", {
+      slug,
+      id: data.id,
+      source: sourceCol,
+      code: trackingError.code,
+      message: trackingError.message,
+    });
+  } else if (tracked === false) {
+    console.log("[RQS UPLINK] trackingDeduplicated", {
+      slug,
+      id: data.id,
+      source: sourceCol,
+    });
   } else {
-    console.log(
-      "[RQS UPLINK] trackingSuccess",
-      {
-        slug,
-        id: data.id,
-        source: sourceCol,
-      },
-    );
+    console.log("[RQS UPLINK] trackingSuccess", {
+      slug,
+      id: data.id,
+      source: sourceCol,
+    });
   }
 
-  // ---------------------------------------------------------
-  // REDIRECT MUST SURVIVE TRACKING FAILURE
-  // ---------------------------------------------------------
+  return Response.redirect(data.target_url, 302);
+}
 
-  return Response.redirect(
-    data.target_url,
-    302,
-  );
-});
+if (import.meta.main) {
+  Deno.serve(handleRequest);
+}

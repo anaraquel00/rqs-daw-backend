@@ -1,3 +1,7 @@
 {
-  "nodeModulesDir": "auto"
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "check": "deno check index.ts index.rollback-safe.ts tracking.ts tracking_test.ts",
+    "test": "deno test tracking_test.ts"
+  }
 }

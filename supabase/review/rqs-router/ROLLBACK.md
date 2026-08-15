@@ -1,37 +1,29 @@
-# RQS Uplink Router — Rollback Procedure
+# RQS Uplink Router — Safe Rollback
+
+The rollback disables tracking while keeping public redirects available. It
+must never restore the vulnerable legacy RPC or its public grants.
 
 ## Preconditions
 
-- Keep `index.before.ts` unchanged.
-- Do not expose any Supabase secret in Git or logs.
-- Confirm database rollback completed before router rollback.
+- Confirm an approved database backup or restore point.
+- Keep `index.before.ts` only as historical evidence. **Never redeploy it.**
+- Confirm `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured.
+- Do not expose secrets in Git, commands, screenshots, or logs.
 
-## Router rollback
+## Safe order
 
-1. Restore the exact source from:
+1. Deploy `index.rollback-safe.ts` as `rqs-router`.
+2. Verify the health endpoint reports `tracking: "disabled"`.
+3. Verify a known Uplink returns a redirect without changing counters.
+4. Run the reviewed `uplink_tracking_rollback.sql`.
+5. Run `uplink_tracking_audit.sql` and confirm:
+   - the V3 RPC is absent;
+   - the legacy RPC is absent or has no application-role EXECUTE grants;
+   - public table-wide SELECT is absent;
+   - the authenticated owner-only SELECT policy remains;
+   - redirect-only routing still works.
 
-   `supabase/review/rqs-router/index.before.ts`
+## Recovery after the incident
 
-2. Deploy it again as `rqs-router`.
-
-3. Restore the previous function configuration.
-
-4. Confirm:
-
-   - `/rqs-router` health endpoint responds;
-   - `flower-newworld` redirects correctly;
-   - no secret appears in Edge Function logs.
-
-## Database rollback
-
-Execute only the reviewed:
-
-`uplink_tracking_rollback.sql`
-
-## Post-rollback audit
-
-Run:
-
-`uplink_tracking_audit.sql`
-
-Confirm the original three-argument RPC and original ACLs are restored.
+Fix the defect in a new reviewed migration and router revision. Do not use the
+pre-migration source or ACLs as a shortcut to re-enable tracking.
