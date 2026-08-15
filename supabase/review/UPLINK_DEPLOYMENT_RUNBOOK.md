@@ -1,4 +1,4 @@
-# RQS Uplink Tracking V3 — Controlled Deployment Runbook
+# RQS Uplink Tracking V3.2 — Controlled Deployment Runbook
 
 This package is review-only. A Git push must not deploy the Supabase function or
 run SQL automatically.
@@ -11,17 +11,24 @@ run SQL automatically.
    review branch.
 4. A high-entropy `UPLINK_TRACKING_SALT` of at least 32 characters configured
    as an Edge Function secret.
-5. Router type-check and unit tests pass.
-6. Migration and rollback reviewed by two people.
+5. The production router is reachable only through the Supabase Edge Functions
+   edge gateway. Direct/self-hosted Deno entry paths are unsupported for
+   tracking because they do not provide the trusted address-header invariant.
+6. Router type-check and unit tests pass.
+7. Migration and rollback reviewed by two people.
 
 ## Safe deployment order
 
 1. Capture BEFORE snapshots using `uplink_tracking_audit.sql`.
-2. Deploy the V3 `rqs-router` first.
-   - Before the SQL migration, its V3 RPC call will fail safely.
+2. Deploy the V3.2 `rqs-router` first.
+   - Before the SQL migration, its V3.2 RPC call will fail safely.
    - Lookup and redirect continue through the server-side service-role client.
 3. Verify health and one redirect without expecting a counter change.
-   - Confirm the Edge Function receives `cf-connecting-ip` or `x-real-ip`.
+   - Confirm the Supabase Edge Function receives `cf-connecting-ip`.
+   - In a non-production validation environment, send two otherwise identical
+     requests from one client while supplying different fake
+     `cf-connecting-ip` values. Confirm the gateway overwrites them and the
+     rolling 60-second rule counts at most one request.
    - Confirm the response contains `Cache-Control: no-store, private`.
 4. Execute `uplink_tracking_migration.sql` once.
 5. Execute `uplink_tracking_tests.sql`; it must finish with `ROLLBACK` and no

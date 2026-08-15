@@ -1,5 +1,5 @@
 -- =========================================================
--- RQS UPLINK TRACKING SECURITY V3
+-- RQS UPLINK TRACKING SECURITY V3.2
 -- SAFE ROLLBACK / TRACKING DISABLE — REVIEW ONLY
 --
 -- This rollback deliberately DOES NOT restore the vulnerable legacy RPC,
@@ -9,7 +9,7 @@
 
 begin;
 
--- Disable and remove the V3 tracking RPC. Dynamic SQL tolerates a failed or
+-- Disable and remove the V3.2 tracking RPC. Dynamic SQL tolerates a failed or
 -- only partially applied migration.
 do $v3_rpc$
 begin

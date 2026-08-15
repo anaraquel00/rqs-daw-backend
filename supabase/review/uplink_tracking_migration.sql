@@ -1,5 +1,5 @@
 -- =========================================================
--- RQS UPLINK TRACKING SECURITY V3
+-- RQS UPLINK TRACKING SECURITY V3.2
 -- PROPOSED MIGRATION — REVIEW ONLY
 -- DO NOT RUN IN PRODUCTION WITHOUT APPROVAL AND BACKUP
 -- =========================================================
@@ -115,13 +115,12 @@ create table public.rqs_uplink_click_dedup (
     on delete cascade,
   fingerprint_hash text not null
     check (fingerprint_hash ~ '^[0-9a-f]{64}$'),
-  window_started_at timestamptz not null,
-  created_at timestamptz not null default statement_timestamp(),
-  primary key (link_id, fingerprint_hash, window_started_at)
+  last_counted_at timestamptz not null,
+  primary key (link_id, fingerprint_hash)
 );
 
 create index rqs_uplink_click_dedup_retention_idx
-on public.rqs_uplink_click_dedup(link_id, created_at);
+on public.rqs_uplink_click_dedup(link_id, last_counted_at);
 
 alter table public.rqs_uplink_click_dedup enable row level security;
 
@@ -129,7 +128,7 @@ revoke all
 on table public.rqs_uplink_click_dedup
 from public, anon, authenticated;
 
-grant select, insert, delete
+grant select, insert, update, delete
 on table public.rqs_uplink_click_dedup
 to service_role;
 
@@ -137,8 +136,8 @@ to service_role;
 -- 3. SERVICE-ROLE-ONLY ATOMIC RPC
 --
 -- Returns true when counters were incremented.
--- Returns false when the same fingerprint was already counted for this
--- link in the current one-minute window.
+-- Returns false when the same fingerprint was counted for this link during
+-- the preceding rolling 60 seconds.
 -- =========================================================
 
 create function public.increment_uplink_clicks(
@@ -156,7 +155,7 @@ declare
   v_role text;
   v_monthly_clicks bigint;
   v_click_quota bigint;
-  v_window_started_at timestamptz;
+  v_now timestamptz;
   v_inserted integer;
 begin
   if source_col is null
@@ -185,21 +184,26 @@ begin
     raise exception 'UPLINK_NOT_FOUND';
   end if;
 
-  v_window_started_at := date_trunc('minute', statement_timestamp());
+  -- Evaluate wall-clock time only after the Uplink row lock is acquired. This
+  -- avoids using a stale statement start time after a concurrent caller wait.
+  v_now := clock_timestamp();
 
-  insert into public.rqs_uplink_click_dedup (
+  insert into public.rqs_uplink_click_dedup as dedup (
     link_id,
     fingerprint_hash,
-    window_started_at
+    last_counted_at
   ) values (
     link_id,
     request_fingerprint,
-    v_window_started_at
+    v_now
   )
-  on conflict do nothing;
+  on conflict (link_id, fingerprint_hash) do update
+  set last_counted_at = excluded.last_counted_at
+  where dedup.last_counted_at
+        <= excluded.last_counted_at - interval '60 seconds'
+  returning 1 into v_inserted;
 
-  get diagnostics v_inserted = row_count;
-  if v_inserted = 0 then
+  if v_inserted is null then
     return false;
   end if;
 
@@ -267,7 +271,7 @@ begin
   -- cleanup is still required for inactive links; see UPLINK_ABUSE_PROTECTION.
   delete from public.rqs_uplink_click_dedup as d
   where d.link_id = $1
-    and d.created_at < statement_timestamp() - interval '48 hours';
+    and d.last_counted_at < v_now - interval '48 hours';
 
   return true;
 end;

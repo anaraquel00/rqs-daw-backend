@@ -1,5 +1,5 @@
 -- =========================================================
--- RQS UPLINK TRACKING SECURITY V3 — POST-MIGRATION TESTS
+-- RQS UPLINK TRACKING SECURITY V3.2 — POST-MIGRATION TESTS
 --
 -- Run in Supabase SQL Editor only after approved migration.
 -- All controlled data mutations are enclosed in one transaction and rolled
@@ -127,6 +127,18 @@ begin
 end;
 $fixture$;
 
+-- Verify the SECURITY INVOKER RPC can execute under the actual service_role
+-- rather than only as the migration owner. The savepoint removes this probe.
+savepoint service_role_runtime_probe;
+set local role service_role;
+select public.increment_uplink_clicks(
+  '6638dcbb-5454-4b08-a634-4ca5e735b8c9'::uuid,
+  'source_direct',
+  repeat('0', 64)
+);
+reset role;
+rollback to savepoint service_role_runtime_probe;
+
 -- =========================================================
 -- 3. INVALID INPUTS AND ATOMICITY
 -- =========================================================
@@ -190,7 +202,7 @@ end;
 $invalid_source$;
 
 -- =========================================================
--- 4. SUCCESS, SOURCE COUNTER AND ONE-MINUTE DEDUPLICATION
+-- 4. SUCCESS, SOURCE COUNTER AND ROLLING 60-SECOND DEDUPLICATION
 -- =========================================================
 
 update public.profiles
@@ -205,7 +217,8 @@ declare
   v_instagram_before bigint;
   v_monthly_before bigint;
   v_first boolean;
-  v_second boolean;
+  v_within_window boolean;
+  v_after_window boolean;
 begin
   select clicks, source_instagram
     into v_clicks_before, v_instagram_before
@@ -222,29 +235,50 @@ begin
     'source_instagram',
     repeat('d', 64)
   );
-  v_second := public.increment_uplink_clicks(
+  -- Put the accepted event 59 seconds in the past. A new request must still
+  -- be deduplicated even if the wall-clock minute boundary has changed.
+  update public.rqs_uplink_click_dedup
+  set last_counted_at = clock_timestamp() - interval '59 seconds'
+  where link_id = v_link_id
+    and fingerprint_hash = repeat('d', 64);
+
+  v_within_window := public.increment_uplink_clicks(
     v_link_id,
     'source_instagram',
     repeat('d', 64)
   );
 
-  if v_first is not true or v_second is not false then
-    raise exception 'TEST_FAIL: dedup return values are incorrect';
+  -- At 61 seconds the same fingerprint must be accepted again.
+  update public.rqs_uplink_click_dedup
+  set last_counted_at = clock_timestamp() - interval '61 seconds'
+  where link_id = v_link_id
+    and fingerprint_hash = repeat('d', 64);
+
+  v_after_window := public.increment_uplink_clicks(
+    v_link_id,
+    'source_instagram',
+    repeat('d', 64)
+  );
+
+  if v_first is not true
+     or v_within_window is not false
+     or v_after_window is not true then
+    raise exception 'TEST_FAIL: rolling 60-second dedup values are incorrect';
   end if;
 
   if (select clicks from public.rqs_uplinks where id = v_link_id)
-       <> v_clicks_before + 1 then
-    raise exception 'TEST_FAIL: clicks did not increase exactly once';
+       <> v_clicks_before + 2 then
+    raise exception 'TEST_FAIL: clicks did not match rolling-window results';
   end if;
 
   if (select source_instagram from public.rqs_uplinks where id = v_link_id)
-       <> v_instagram_before + 1 then
-    raise exception 'TEST_FAIL: Instagram counter did not increase once';
+       <> v_instagram_before + 2 then
+    raise exception 'TEST_FAIL: Instagram counter did not match dedup results';
   end if;
 
   if (select monthly_clicks from public.profiles where id = v_user_id)
-       <> v_monthly_before + 1 then
-    raise exception 'TEST_FAIL: monthly_clicks did not increase once';
+       <> v_monthly_before + 2 then
+    raise exception 'TEST_FAIL: monthly_clicks did not match dedup results';
   end if;
 end;
 $dedup$;

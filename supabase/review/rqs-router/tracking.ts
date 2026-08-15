@@ -131,18 +131,17 @@ export function trackingDecision(req: Request): TrackingDecision {
 }
 
 export function getClientAddress(req: Request): string | null {
-  // Trust only headers supplied by the platform gateway. Do not use a raw
-  // X-Forwarded-For fallback because a public caller may be able to inject or
-  // prepend values and bypass deduplication.
-  for (const header of ["cf-connecting-ip", "x-real-ip"]) {
-    const value = req.headers.get(header)?.trim();
-    if (
-      value &&
-      value.length <= 128 &&
-      !/[\u0000-\u001f\u007f]/.test(value)
-    ) {
-      return value;
-    }
+  // Production tracking is supported only through the Supabase Edge gateway.
+  // Cloudflare sets CF-Connecting-IP on edge-to-origin traffic. Generic
+  // forwarded headers are intentionally ignored because callers can supply or
+  // prepend them on less constrained proxy paths.
+  const value = req.headers.get("cf-connecting-ip")?.trim();
+  if (
+    value &&
+    value.length <= 128 &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return value;
   }
 
   return null;

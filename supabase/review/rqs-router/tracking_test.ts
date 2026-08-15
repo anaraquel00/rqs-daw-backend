@@ -121,7 +121,7 @@ Deno.test("fingerprint fails closed without salt or client address", async () =>
   assertEquals("track" in missingAddress && missingAddress.track, false);
 
   const noSalt = new Request("https://go.example/link", {
-    headers: { "x-real-ip": "203.0.113.10" },
+    headers: { "cf-connecting-ip": "203.0.113.10" },
   });
   const missingSalt = await createTrackingFingerprint(
     noSalt,
@@ -140,7 +140,7 @@ Deno.test("fingerprint fails closed without salt or client address", async () =>
   assertEquals("track" in weakSalt && weakSalt.track, false);
 });
 
-Deno.test("client address trusts gateway headers and ignores X-Forwarded-For", () => {
+Deno.test("client address accepts only the Supabase edge gateway CF header", () => {
   const gateway = new Request("https://go.example/link", {
     headers: {
       "cf-connecting-ip": "203.0.113.10",
@@ -151,7 +151,10 @@ Deno.test("client address trusts gateway headers and ignores X-Forwarded-For", (
   assertEquals(getClientAddress(gateway), "203.0.113.10");
 
   const untrustedOnly = new Request("https://go.example/link", {
-    headers: { "x-forwarded-for": "198.51.100.99" },
+    headers: {
+      "x-real-ip": "203.0.113.11",
+      "x-forwarded-for": "198.51.100.99",
+    },
   });
   assertEquals(getClientAddress(untrustedOnly), null);
 });

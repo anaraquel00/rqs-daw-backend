@@ -39,6 +39,7 @@ Deno.test("router lookup, tracking, failure fallback and HEAD contract", async (
 
   const calls: FetchCall[] = [];
   let rpcShouldFail = false;
+  let rpcResult = true;
 
   globalThis.fetch = async (
     input: RequestInfo | URL,
@@ -60,7 +61,7 @@ Deno.test("router lookup, tracking, failure fallback and HEAD contract", async (
       if (rpcShouldFail) {
         return json({ code: "P0001", message: "CLICK_QUOTA_EXCEEDED" }, 400);
       }
-      return json(true);
+      return json(rpcResult);
     }
 
     return json({ message: "unexpected request" }, 500);
@@ -102,6 +103,16 @@ Deno.test("router lookup, tracking, failure fallback and HEAD contract", async (
     );
 
     calls.length = 0;
+    rpcResult = false;
+    const deduplicatedResponse = await handleRequest(request);
+    assertEquals(deduplicatedResponse.status, 302);
+    assertEquals(
+      deduplicatedResponse.headers.get("location"),
+      "https://open.spotify.com/track/test",
+    );
+    assertEquals(calls.length, 2);
+
+    calls.length = 0;
     const headResponse = await handleRequest(
       new Request("https://go.raquelsynths.com/flower-newworld", {
         method: "HEAD",
@@ -113,6 +124,7 @@ Deno.test("router lookup, tracking, failure fallback and HEAD contract", async (
     assertEquals(calls[0].method, "GET");
 
     calls.length = 0;
+    rpcResult = true;
     rpcShouldFail = true;
     const failedTrackingResponse = await handleRequest(request);
     assertEquals(failedTrackingResponse.status, 302);
