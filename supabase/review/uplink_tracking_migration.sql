@@ -177,7 +177,7 @@ begin
   select u.user_id
     into v_user_id
   from public.rqs_uplinks as u
-  where u.id = link_id
+  where u.id = $1
   for no key update;
 
   if not found or v_user_id is null then
@@ -193,11 +193,11 @@ begin
     fingerprint_hash,
     last_counted_at
   ) values (
-    link_id,
-    request_fingerprint,
+    $1,
+    $3,
     v_now
   )
-  on conflict (link_id, fingerprint_hash) do update
+  on conflict on constraint rqs_uplink_click_dedup_pkey do update
   set last_counted_at = excluded.last_counted_at
   where dedup.last_counted_at
         <= excluded.last_counted_at - interval '60 seconds'
