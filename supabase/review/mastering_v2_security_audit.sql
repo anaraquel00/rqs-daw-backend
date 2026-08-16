@@ -21,12 +21,49 @@ where schemaname = 'public'
   and tablename = 'mastering_quota_reservations';
 
 select
+  not has_table_privilege('anon', 'public.mastering_quota_reservations', 'SELECT')
+    and not has_table_privilege('anon', 'public.mastering_quota_reservations', 'INSERT')
+    and not has_table_privilege('anon', 'public.mastering_quota_reservations', 'UPDATE')
+    and not has_table_privilege('anon', 'public.mastering_quota_reservations', 'DELETE')
+    as anon_table_dml_denied,
+  not has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'SELECT')
+    and not has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'INSERT')
+    and not has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'UPDATE')
+    and not has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'DELETE')
+    as authenticated_table_dml_denied,
+  has_table_privilege('service_role', 'public.mastering_quota_reservations', 'SELECT')
+    and has_table_privilege('service_role', 'public.mastering_quota_reservations', 'INSERT')
+    and has_table_privilege('service_role', 'public.mastering_quota_reservations', 'UPDATE')
+    and has_table_privilege('service_role', 'public.mastering_quota_reservations', 'DELETE')
+    as service_role_table_dml_present;
+
+select
   to_regprocedure('public.reserve_mastering_quota(uuid,uuid)') is not null
     as reserve_rpc_present,
   to_regprocedure('public.confirm_mastering_quota(uuid,uuid)') is not null
     as confirm_rpc_present,
   to_regprocedure('public.release_mastering_quota(uuid,uuid)') is not null
     as release_rpc_present;
+
+select
+  count(*) = 3 as exact_mastering_rpc_count,
+  coalesce(bool_and(not p.prosecdef), false) as all_security_invoker,
+  coalesce(bool_and(p.proconfig = array['search_path=""']::text[]), false)
+    as all_fixed_empty_search_path,
+  coalesce(bool_and(not has_function_privilege('anon', p.oid, 'EXECUTE')), false)
+    as anon_execute_denied,
+  coalesce(bool_and(not has_function_privilege('authenticated', p.oid, 'EXECUTE')), false)
+    as authenticated_execute_denied,
+  coalesce(bool_and(has_function_privilege('service_role', p.oid, 'EXECUTE')), false)
+    as service_role_execute_present
+from pg_proc as p
+join pg_namespace as n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in (
+    'reserve_mastering_quota',
+    'confirm_mastering_quota',
+    'release_mastering_quota'
+  );
 
 select
   p.proname,
