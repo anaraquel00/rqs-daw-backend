@@ -89,6 +89,33 @@ where id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2'::uuid;
 
 reset role;
 
+-- Exact table-privilege matrix: browser roles have no direct reservation DML;
+-- service_role has only the DML surface required by the SECURITY INVOKER RPCs.
+do $privilege_matrix$
+begin
+  if has_table_privilege('anon', 'public.mastering_quota_reservations', 'SELECT')
+     or has_table_privilege('anon', 'public.mastering_quota_reservations', 'INSERT')
+     or has_table_privilege('anon', 'public.mastering_quota_reservations', 'UPDATE')
+     or has_table_privilege('anon', 'public.mastering_quota_reservations', 'DELETE') then
+    raise exception 'ANON_MASTERING_RESERVATION_DML_NOT_REVOKED';
+  end if;
+
+  if has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'SELECT')
+     or has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'INSERT')
+     or has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.mastering_quota_reservations', 'DELETE') then
+    raise exception 'AUTHENTICATED_MASTERING_RESERVATION_DML_NOT_REVOKED';
+  end if;
+
+  if not has_table_privilege('service_role', 'public.mastering_quota_reservations', 'SELECT')
+     or not has_table_privilege('service_role', 'public.mastering_quota_reservations', 'INSERT')
+     or not has_table_privilege('service_role', 'public.mastering_quota_reservations', 'UPDATE')
+     or not has_table_privilege('service_role', 'public.mastering_quota_reservations', 'DELETE') then
+    raise exception 'SERVICE_ROLE_MASTERING_RESERVATION_DML_MISSING';
+  end if;
+end;
+$privilege_matrix$;
+
 -- Cleanup fixture before commit. The transaction commits only proof of cleanup.
 delete from public.mastering_quota_reservations
 where user_id in (
