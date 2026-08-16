@@ -124,7 +124,7 @@ jobs:
                 )
                 and (
                   p.prosecdef
-                  or p.proconfig is distinct from array['search_path=']::text[]
+                  or p.proconfig is distinct from array['search_path=""']::text[]
                   or has_function_privilege('anon', p.oid, 'EXECUTE')
                   or has_function_privilege('authenticated', p.oid, 'EXECUTE')
                   or not has_function_privilege('service_role', p.oid, 'EXECUTE')
