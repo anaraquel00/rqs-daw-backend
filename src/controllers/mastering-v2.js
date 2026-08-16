@@ -27,6 +27,7 @@ const {
 const router = express.Router();
 const TMP_DIR = os.tmpdir();
 const MAX_DIRECT_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const MAX_S3_INPUT_BYTES = MAX_DIRECT_UPLOAD_BYTES;
 const ALLOWED_AUDIO_EXTENSIONS = new Set(['.wav', '.mp3']);
 const LOCAL_OUTPUT_MODE = process.env.RQS_MASTERING_V2_LOCAL_OUTPUT === '1';
 const ALLOW_DIRECT_UPLOAD = LOCAL_OUTPUT_MODE || process.env.RQS_MASTERING_V2_DIRECT_UPLOAD === '1';
@@ -226,6 +227,18 @@ async function resolveInput(req, user) {
   const inputPath = path.join(TMP_DIR, `v2_s3_input_${crypto.randomUUID()}${extension}`);
   const downloadCommand = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key });
   const response = await s3Client.send(downloadCommand);
+  const contentLength = Number(response.ContentLength);
+
+  if (!Number.isFinite(contentLength) || contentLength < 0) {
+    response.Body?.destroy?.();
+    throw new RqsHttpError(502, 'S3 audio size could not be verified.', 'S3_INPUT_SIZE_UNKNOWN');
+  }
+
+  if (contentLength > MAX_S3_INPUT_BYTES) {
+    response.Body?.destroy?.();
+    throw new RqsHttpError(413, 'S3 audio input exceeds the 1 GiB limit.', 'S3_INPUT_TOO_LARGE');
+  }
+
   const fileStream = fs.createWriteStream(inputPath, { flags: 'wx' });
 
   await new Promise((resolve, reject) => {
@@ -371,11 +384,6 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
 
   try {
     const user = req.rqsMasteringUser;
-    const resolved = await resolveInput(req, user);
-    inputPath = resolved.inputPath;
-    outputPath = path.join(TMP_DIR, `v2_output_${crypto.randomUUID()}.wav`);
-
-    const args = buildRenderArgs(req.body, inputPath, outputPath);
     const isPreview = req.body.preview === 'true' || req.body.preview === true;
 
     if (!isPreview && !LOCAL_OUTPUT_MODE) {
@@ -383,6 +391,12 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
       quotaReservationUserId = user.id;
       await reserveMasteringQuota(user.id, quotaReservationId);
     }
+
+    const resolved = await resolveInput(req, user);
+    inputPath = resolved.inputPath;
+    outputPath = path.join(TMP_DIR, `v2_output_${crypto.randomUUID()}.wav`);
+
+    const args = buildRenderArgs(req.body, inputPath, outputPath);
 
     const result = await runPython(args);
     if (result.code !== 0) {
