@@ -53,6 +53,11 @@ begin
     raise exception 'COMPLETED_MASTERS_TYPE_UNSUPPORTED: %', v_data_type;
   end if;
 
+  if not has_table_privilege('service_role', 'public.profiles', 'SELECT')
+     or not has_table_privilege('service_role', 'public.profiles', 'UPDATE') then
+    raise exception 'SERVICE_ROLE_PROFILES_PRIVILEGES_MISSING';
+  end if;
+
   if exists (
     select 1
     from public.profiles
