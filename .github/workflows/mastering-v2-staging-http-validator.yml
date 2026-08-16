@@ -1,0 +1,61 @@
+name: Mastering V2 Staging HTTP Validator
+
+on:
+  push:
+    branches:
+      - integration/mastering-v2-secure-p1-20260816
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-staging-http-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell validator
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/Test-MasteringV2StagingHttpAuth.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host 'STAGING_HTTP_VALIDATOR_SYNTAX: PASS'
+
+      - name: Verify staging-only and no-S3 contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='scripts/Test-MasteringV2StagingHttpAuth.ps1'
+          grep -F -q 'uwrqbywapomuloresoek' "$FILE"
+          grep -F -q 'RQS_STAGING_SUPABASE_PUBLISHABLE_KEY' "$FILE"
+          grep -F -q 'STAGING_HTTP_AUTH_REQUIRED_401' "$FILE"
+          grep -F -q 'STAGING_HTTP_INVALID_JWT_401' "$FILE"
+          grep -F -q 'STAGING_HTTP_FOREIGN_S3_KEY_403' "$FILE"
+          grep -F -q 'STAGING_HTTP_PATH_ESCAPE_KEY_400' "$FILE"
+          grep -F -q 'S3_REQUESTS_PERFORMED: NONE' "$FILE"
+          grep -F -q 'PRODUCTION_REQUESTS_PERFORMED: NONE' "$FILE"
+          grep -F -q 'SERVICE_ROLE_SECRET_USED: NONE' "$FILE"
+          grep -F -q 'SECRETS_PRINTED: NONE' "$FILE"
+          if grep -F -q 'ucearnthodrltkvkmhit' "$FILE"; then
+            echo 'ERROR: production Supabase ref leaked into staging HTTP validator.'
+            exit 1
+          fi
+          if grep -F -q 'amzn-rqs-bunker-sa' "$FILE"; then
+            echo 'ERROR: production S3 bucket leaked into staging HTTP validator.'
+            exit 1
+          fi
+          echo 'STAGING_HTTP_VALIDATOR_ISOLATION: PASS'
