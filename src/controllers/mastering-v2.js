@@ -23,6 +23,7 @@ const {
   confirmMasteringQuota,
   releaseMasteringQuota,
 } = require('../lib/supabase-server');
+const { getMasteringStorageConfig } = require('../lib/mastering-v2-storage');
 
 const router = express.Router();
 const TMP_DIR = os.tmpdir();
@@ -75,11 +76,18 @@ const upload = multer({
   },
 });
 
-const s3Client = new S3Client({
-  region: 'sa-east-1',
-  requestChecksumCalculation: 'WHEN_REQUIRED',
-});
-const BUCKET_NAME = 'amzn-rqs-bunker-sa';
+const s3Clients = new Map();
+
+function getS3Client(region) {
+  if (!s3Clients.has(region)) {
+    s3Clients.set(region, new S3Client({
+      region,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+    }));
+  }
+  return s3Clients.get(region);
+}
+
 const PYTHON_BIN = process.env.RQS_PYTHON_BIN
   || (fs.existsSync('/opt/venv/bin/python3')
     ? '/opt/venv/bin/python3'
@@ -115,7 +123,12 @@ function safeUnlink(filePath) {
 async function safeDeleteS3(key) {
   if (!key) return;
   try {
-    await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+    const storageConfig = getMasteringStorageConfig();
+    const s3Client = getS3Client(storageConfig.region);
+    await s3Client.send(new DeleteObjectCommand({
+      Bucket: storageConfig.bucketName,
+      Key: key,
+    }));
   } catch (error) {
     console.warn('[MASTERING V2] S3 cleanup warning.');
   }
@@ -224,8 +237,13 @@ async function resolveInput(req, user) {
     throw error;
   }
 
+  const storageConfig = getMasteringStorageConfig();
+  const s3Client = getS3Client(storageConfig.region);
   const inputPath = path.join(TMP_DIR, `v2_s3_input_${crypto.randomUUID()}${extension}`);
-  const downloadCommand = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key });
+  const downloadCommand = new GetObjectCommand({
+    Bucket: storageConfig.bucketName,
+    Key: s3Key,
+  });
   const response = await s3Client.send(downloadCommand);
   const contentLength = Number(response.ContentLength);
 
@@ -324,6 +342,8 @@ router.get('/presigned-url', requireMasteringUser, async (req, res) => {
       return res.status(400).json({ error: 'Presigned upload is not used in local output mode.' });
     }
 
+    const storageConfig = getMasteringStorageConfig();
+    const s3Client = getS3Client(storageConfig.region);
     const user = req.rqsMasteringUser;
     const originalName = sanitizeUploadName(req.query.filename);
     const extension = allowedAudioExtension(originalName);
@@ -337,7 +357,7 @@ router.get('/presigned-url', requireMasteringUser, async (req, res) => {
     const uploadUrl = await getSignedUrl(
       s3Client,
       new PutObjectCommand({
-        Bucket: BUCKET_NAME,
+        Bucket: storageConfig.bucketName,
         Key: s3Key,
         ContentType: contentType,
       }),
@@ -436,13 +456,15 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
       });
     }
 
+    const storageConfig = getMasteringStorageConfig();
+    const s3Client = getS3Client(storageConfig.region);
     uploadedMasterS3Key = `masters/${user.id}/${cleanMasterName}_${Date.now()}_${crypto.randomUUID()}.wav`;
     const outputStat = await fs.promises.stat(outputPath);
     const outputStream = fs.createReadStream(outputPath);
 
     try {
       await s3Client.send(new PutObjectCommand({
-        Bucket: BUCKET_NAME,
+        Bucket: storageConfig.bucketName,
         Key: uploadedMasterS3Key,
         Body: outputStream,
         ContentLength: outputStat.size,
@@ -455,7 +477,7 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
     const downloadUrl = await getSignedUrl(
       s3Client,
       new GetObjectCommand({
-        Bucket: BUCKET_NAME,
+        Bucket: storageConfig.bucketName,
         Key: uploadedMasterS3Key,
         ResponseContentDisposition: `attachment; filename="${cleanMasterName}.wav"`,
       }),
