@@ -34,7 +34,7 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error "$path: $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
               exit 1
             }
           }
@@ -53,7 +53,7 @@ jobs:
           grep -F -q 'PRODUCTION_REQUESTS_PERFORMED: NONE' "$FILE"
           grep -F -q 'SECRETS_PRINTED: NONE' "$FILE"
           grep -F -q 'STAGING_QUOTA_HTTP_CLEANUP: PASS' "$FILE"
-          grep -F -q "Invoke-WebRequest:UserAgent" "$WRAPPER"
+          grep -F -q 'Invoke-WebRequest:UserAgent' "$WRAPPER"
           grep -F -q 'rqs-mastering-v2-staging-validator/1.0' "$WRAPPER"
           grep -F -q 'Test-MasteringV2StagingQuotaHttp.ps1' "$WRAPPER"
           if grep -F -q 'ucearnthodrltkvkmhit' "$FILE" "$WRAPPER"; then
