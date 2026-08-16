@@ -1,0 +1,89 @@
+name: Mastering V2 Integration
+
+on:
+  push:
+    branches:
+      - integration/mastering-v2-final-beta-20260812-backend
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check PowerShell local launcher syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/Start-MasteringV2LocalIntegration.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host 'MASTERING_V2_LOCAL_LAUNCHER_SYNTAX: PASS'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pip-audit
+
+      - name: Gate Python dependency vulnerabilities
+        run: python -m pip_audit --progress-spinner off
+
+      - name: Run Python tests
+        run: python -m pytest -q
+
+      - name: Validate V2 capabilities CLI
+        run: python -m src.controllers.mastering_v2_cli capabilities
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Gate complete Node dependency vulnerabilities
+        run: npm audit
+
+      - name: Check Node transport syntax
+        run: |
+          node --check server.js
+          node --check scripts/mastering-v2-local-server.js
+          node --check src/controllers/mastering-v2.js
+          node --check tests/mastering_v2_http_e2e.mjs
+          node --check tests/mastering_v2_security_e2e.mjs
+
+      - name: Run local Mastering V2 HTTP E2E
+        run: node tests/mastering_v2_http_e2e.mjs
+
+      - name: Run Mastering V2 security E2E
+        run: node tests/mastering_v2_security_e2e.mjs

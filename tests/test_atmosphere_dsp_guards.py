@@ -3,9 +3,8 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-import pytest
-
 from src.controllers import core_dsp, mastering_v2
+from src.controllers.mastering_profiles import Atmosphere
 
 
 def _core_source() -> str:
@@ -49,13 +48,29 @@ def test_v2_hundred_intensity_has_full_character_amount():
     assert plan.target_lufs == -11.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known migration debt: legacy core still groups Atmospheres into Blue/Red factions.",
-)
-def test_core_dsp_no_longer_maps_atmospheres_to_blue_red_factions():
-    source = _core_source()
-    assert 'faccao = "blue" if perfil in ["clear_sky", "clear sky", "aurora"] else "red"' not in source
+def test_legacy_faction_inference_remains_only_as_compatibility_fallback():
+    assert core_dsp.resolve_legacy_faction("clear_sky") == "blue"
+    assert core_dsp.resolve_legacy_faction("aurora") == "blue"
+    assert core_dsp.resolve_legacy_faction("thunder") == "red"
+    assert core_dsp.resolve_legacy_faction("sunroof") == "red"
+
+
+def test_explicit_legacy_faction_override_is_independent_of_profile():
+    assert core_dsp.resolve_legacy_faction("thunder", "blue") == "blue"
+    assert core_dsp.resolve_legacy_faction("clear_sky", "red") == "red"
+
+
+def test_v2_plan_carries_explicit_blue_compatibility_faction_for_every_atmosphere():
+    for atmosphere in Atmosphere:
+        plan = mastering_v2.build_render_plan_v2(
+            destination="streaming",
+            platform="spotify",
+            atmosphere=atmosphere,
+            intensity_percent=50,
+        )
+        assert plan.legacy_dsp_style == "clear_sky"
+        assert plan.legacy_dsp_intensity == "media"
+        assert plan.legacy_dsp_faction == "blue"
 
 
 def test_zero_intensity_final_render_uses_delivery_only_path(monkeypatch):
@@ -117,8 +132,53 @@ def test_v2_bypasses_legacy_fixed_high_cleanup(monkeypatch):
     assert len(calls) == 2
 
     for args, kwargs in calls:
-        assert kwargs == {"high_cleanup_amount": 0.0}
+        assert kwargs == {
+            "high_cleanup_amount": 0.0,
+            "high_compression_amount": 0.0,
+            "side_highpass_cutoff_override": 100.0,
+            "mid_compression_enabled": False,
+            "side_compression_enabled": False,
+            "legacy_faction_override": "blue",
+        }
         assert args[10] == 15000.0
+
+
+
+def test_v2_bypasses_legacy_high_band_compression(monkeypatch):
+    calls = []
+
+    def fake_masterize(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "ok"
+
+    monkeypatch.setattr(
+        mastering_v2.core_dsp,
+        "masterize",
+        fake_masterize,
+    )
+
+    result = mastering_v2.masterize_v2(
+        "input.wav",
+        "output.wav",
+        destination="club",
+        atmosphere="clear_sky",
+        intensity_percent=50,
+        requested_lufs=-11.0,
+    )
+
+    assert result == "ok"
+    assert len(calls) == 1
+
+    _, kwargs = calls[0]
+
+    assert kwargs == {
+        "high_cleanup_amount": 0.0,
+        "high_compression_amount": 0.0,
+        "side_highpass_cutoff_override": 100.0,
+        "mid_compression_enabled": False,
+        "side_compression_enabled": False,
+        "legacy_faction_override": "blue",
+    }
 
 
 def test_side_lowpass_is_controlled_by_v2_not_blue_red_faction(monkeypatch):
@@ -144,7 +204,14 @@ def test_side_lowpass_is_controlled_by_v2_not_blue_red_faction(monkeypatch):
     assert len(calls) == 2
 
     for args, kwargs in calls:
-        assert kwargs == {"high_cleanup_amount": 0.0}
+        assert kwargs == {
+            "high_cleanup_amount": 0.0,
+            "high_compression_amount": 0.0,
+            "side_highpass_cutoff_override": 100.0,
+            "mid_compression_enabled": False,
+            "side_compression_enabled": False,
+            "legacy_faction_override": "blue",
+        }
         assert args[10] == 15000.0
 
 
@@ -169,7 +236,14 @@ def test_transient_character_is_controlled_by_v2_not_blue_red_faction(monkeypatc
     assert result == "ok"
     assert len(calls) == 1
     args, kwargs = calls[0]
-    assert kwargs == {"high_cleanup_amount": 0.0}
+    assert kwargs == {
+            "high_cleanup_amount": 0.0,
+            "high_compression_amount": 0.0,
+            "side_highpass_cutoff_override": 100.0,
+            "mid_compression_enabled": False,
+            "side_compression_enabled": False,
+            "legacy_faction_override": "blue",
+        }
     assert args[8] == 0.5
     assert args[9] == 0.15
 
@@ -194,7 +268,14 @@ def test_side_saturation_is_controlled_by_v2_intensity(monkeypatch):
     assert result == "ok"
     assert len(calls) == 1
     args, kwargs = calls[0]
-    assert kwargs == {"high_cleanup_amount": 0.0}
+    assert kwargs == {
+            "high_cleanup_amount": 0.0,
+            "high_compression_amount": 0.0,
+            "side_highpass_cutoff_override": 100.0,
+            "mid_compression_enabled": False,
+            "side_compression_enabled": False,
+            "legacy_faction_override": "blue",
+        }
     assert args[7] == 0.5
     assert args[8] == 0.5
     assert args[9] == 0.15

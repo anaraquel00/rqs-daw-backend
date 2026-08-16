@@ -11,6 +11,7 @@ def test_spotify_plan():
         atmosphere="thunder", intensity_percent=75)
     assert (p.target_lufs, p.true_peak_ceiling_dbtp) == (-14.0, -1.2)
     assert (p.legacy_dsp_style, p.legacy_dsp_intensity) == ("clear_sky", "media")
+    assert p.legacy_dsp_faction == "blue"
 
 def test_club_plan():
     p = mastering_v2.build_render_plan_v2(
@@ -42,7 +43,14 @@ def test_atmosphere_is_metadata_only_for_now(atmosphere):
 def _capture(monkeypatch):
     calls = []
     def fake(*args, **kwargs):
-        assert kwargs == {"high_cleanup_amount": 0.0}
+        assert kwargs == {
+            "high_cleanup_amount": 0.0,
+            "high_compression_amount": 0.0,
+            "side_highpass_cutoff_override": 100.0,
+            "mid_compression_enabled": False,
+            "side_compression_enabled": False,
+            "legacy_faction_override": "blue",
+        }
         calls.append(args)
         return "ok"
     monkeypatch.setattr(mastering_v2.core_dsp, "masterize", fake)
@@ -82,10 +90,25 @@ def test_routes_festival(monkeypatch):
     assert abs(c[0][-1] - 15000.0) < 1e-12
 
 def test_routes_preview(monkeypatch):
+    preview_source = "preview-segment.wav"
+
+    monkeypatch.setattr(
+        mastering_v2,
+        "_create_preview_source_segment",
+        lambda input_path: preview_source,
+    )
+    monkeypatch.setattr(
+        mastering_v2,
+        "_cleanup_preview_source_segment",
+        lambda path: None,
+    )
+
     c = _capture(monkeypatch)
     mastering_v2.masterize_v2(
         "in", "out", destination="club",
         atmosphere="clear_sky", intensity_percent=50, is_preview=True)
+
+    assert c[0][0] == preview_source
     assert c[0][4] is True
 
 def test_legacy_signature_stays_compatible():
