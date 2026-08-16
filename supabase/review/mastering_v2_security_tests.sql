@@ -27,6 +27,10 @@ values
   ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid, 'free', 2),
   ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2'::uuid, 'premium', 999);
 
+-- Run the application-facing calls as service_role so the test also proves
+-- the intended EXECUTE/table-privilege surface.
+set local role service_role;
+
 -- Free user: final slot reservation succeeds.
 select public.reserve_mastering_quota(
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid,
@@ -50,6 +54,24 @@ select completed_masters = 3 as free_completed_exactly_three
 from public.profiles
 where id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid;
 
+-- At 3/3 another reservation must fail closed with the expected quota error.
+do $quota_exhausted$
+begin
+  begin
+    perform public.reserve_mastering_quota(
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid,
+      'cccccccc-cccc-4ccc-8ccc-ccccccccccc3'::uuid
+    );
+    raise exception 'EXPECTED_MASTERING_QUOTA_EXCEEDED';
+  exception
+    when sqlstate 'P0001' then
+      if sqlerrm <> 'MASTERING_QUOTA_EXCEEDED' then
+        raise;
+      end if;
+  end;
+end;
+$quota_exhausted$;
+
 -- Premium reservation is allowed and does not consume completed_masters.
 select public.reserve_mastering_quota(
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2'::uuid,
@@ -64,6 +86,8 @@ select public.confirm_mastering_quota(
 select completed_masters = 999 as premium_completed_unchanged
 from public.profiles
 where id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2'::uuid;
+
+reset role;
 
 -- Cleanup fixture before commit. The transaction commits only proof of cleanup.
 delete from public.mastering_quota_reservations
