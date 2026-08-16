@@ -12,8 +12,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $BackendPath = Split-Path -Parent $PSScriptRoot
-$BackendBranchExpected = 'feat/mastering-v2-api-integration'
-$FrontendBranchExpected = 'feat/mastering-v2-integration'
+$BackendBranchExpected = 'integration/mastering-v2-secure-p1-20260816'
+$FrontendBranchExpected = 'integration/mastering-v2-final-beta-20260812-frontend'
 $BackendProcess = $null
 $FrontendProcess = $null
 $OldPythonBin = $env:RQS_PYTHON_BIN
