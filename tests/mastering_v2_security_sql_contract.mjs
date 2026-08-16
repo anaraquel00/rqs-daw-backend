@@ -10,6 +10,14 @@ function assertIncludes(value, message) {
 }
 
 assertIncludes(
+  'AUTHENTICATED_COMPLETED_MASTERS_UPDATE_BASELINE_MISSING',
+  'Expected legacy completed_masters ACL preflight is missing.',
+);
+assertIncludes(
+  'revoke update (completed_masters)',
+  'Client completed_masters UPDATE retirement is missing.',
+);
+assertIncludes(
   'create table public.mastering_quota_reservations',
   'Reservation table missing.',
 );
