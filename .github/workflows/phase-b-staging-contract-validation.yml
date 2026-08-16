@@ -41,6 +41,7 @@ jobs:
           runbook='docs/PRODUCTION_SMOKE_ROLLBACK_RUNBOOK.md'
           rotation='docs/CREDENTIAL_ROTATION_GATE.md'
           payment='docs/P1_PAYMENT_MODE_DECISION_GATE.md'
+          storage='docs/STAGING_S3_IAM_CONTRACT.md'
 
           grep -F -q 'AllowStagingObjectMutation' "$script"
           grep -F -q 'AllowStagingCleanup' "$script"
@@ -59,6 +60,8 @@ jobs:
           grep -F -q 'Previously exposed values must never be restored' "$rotation"
           grep -F -q 'SAFE DEFAULT RECOMMENDATION: WAITLIST_ONLY' "$payment"
           grep -F -q 'LIVE_PAYMENT: HOLD' "$payment"
+          grep -F -q 'AWS CREATE BUCKET: NOT AUTHORIZED' "$storage"
+          grep -F -q 'production bucket access' "$storage"
 
           echo 'PHASE_B_FAIL_CLOSED_BOUNDARIES: PASS'
 
@@ -88,6 +91,55 @@ jobs:
           print('PHASE_B_PROVISIONING_MUTATION_COMMANDS: NONE')
           PY
 
+      - name: Validate staging IAM and CORS templates
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          production_bucket = 'amzn-rqs-bunker-sa'
+          policy_path = Path('infra/staging/mastering-v2-execution-role-policy.template.json')
+          cors_path = Path('infra/staging/mastering-v2-cors.template.json')
+          policy = json.loads(policy_path.read_text(encoding='utf-8'))
+          cors = json.loads(cors_path.read_text(encoding='utf-8'))
+
+          allowed_actions = {'s3:PutObject', 's3:GetObject', 's3:DeleteObject'}
+          seen_actions = set()
+          for statement in policy.get('Statement', []):
+              if statement.get('Effect') != 'Allow':
+                  raise SystemExit('Unexpected non-Allow statement in staging object policy template.')
+              actions = set(statement.get('Action', []))
+              if not actions <= allowed_actions:
+                  raise SystemExit(f'Forbidden IAM action in template: {sorted(actions - allowed_actions)}')
+              seen_actions |= actions
+              resource = str(statement.get('Resource', ''))
+              if production_bucket in resource:
+                  raise SystemExit('Production bucket leaked into staging IAM template.')
+              if '<DEDICATED_STAGING_BUCKET>' not in resource:
+                  raise SystemExit('Staging IAM resource lost the dedicated-bucket placeholder.')
+              if not (resource.endswith('/uploads/*') or resource.endswith('/masters/*')):
+                  raise SystemExit(f'Unexpected staging IAM resource scope: {resource}')
+          if seen_actions != allowed_actions:
+              raise SystemExit(f'Unexpected IAM action set: {sorted(seen_actions)}')
+
+          if not isinstance(cors, list) or len(cors) != 1:
+              raise SystemExit('Staging CORS template must contain exactly one rule.')
+          rule = cors[0]
+          origins = rule.get('AllowedOrigins', [])
+          if origins != ['<EXACT_STAGING_FRONTEND_ORIGIN>']:
+              raise SystemExit(f'Unexpected staging CORS origins: {origins}')
+          if '*' in origins:
+              raise SystemExit('Wildcard staging CORS origin is forbidden.')
+          if set(rule.get('AllowedMethods', [])) != {'PUT', 'GET', 'HEAD'}:
+              raise SystemExit('Unexpected staging CORS method set.')
+          if rule.get('AllowedHeaders', []) != ['Content-Type']:
+              raise SystemExit('Unexpected staging CORS allowed headers.')
+
+          print('PHASE_B_STAGING_IAM_LEAST_PRIVILEGE_TEMPLATE: PASS')
+          print('PHASE_B_STAGING_CORS_EXACT_ORIGIN_TEMPLATE: PASS')
+          print('PHASE_B_PRODUCTION_BUCKET_REFERENCE_IN_TEMPLATE: NONE')
+          PY
+
       - name: Scan staged artifacts for credential values
         shell: bash
         run: |
@@ -98,6 +150,9 @@ jobs:
             docs/PRODUCTION_SMOKE_ROLLBACK_RUNBOOK.md
             docs/CREDENTIAL_ROTATION_GATE.md
             docs/P1_PAYMENT_MODE_DECISION_GATE.md
+            docs/STAGING_S3_IAM_CONTRACT.md
+            infra/staging/mastering-v2-execution-role-policy.template.json
+            infra/staging/mastering-v2-cors.template.json
           )
           if grep -E -n 'sk_live_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|sb_secret_[A-Za-z0-9_-]{10,}|AWS_SECRET_ACCESS_KEY[[:space:]]*=[[:space:]]*[^<[:space:]][^[:space:]]*' "${files[@]}"; then
             echo 'ERROR: credential-like value found in Phase B artifacts.'
@@ -111,5 +166,6 @@ jobs:
           echo 'PHASE_B_PRODUCTION_SMOKE_ROLLBACK_RUNBOOK: PASS'
           echo 'PHASE_B_CREDENTIAL_ROTATION_GATE: PASS'
           echo 'PHASE_B_PAYMENT_DECISION_GATE: PASS'
+          echo 'PHASE_B_STAGING_S3_IAM_TEMPLATE: PASS'
           echo 'CLOUD_MUTATION: NONE'
           echo 'PRODUCTION_MUTATION: NONE'
