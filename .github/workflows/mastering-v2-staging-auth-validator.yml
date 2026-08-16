@@ -48,7 +48,7 @@ jobs:
             echo 'ERROR: production Supabase ref leaked into staging Auth validator.'
             exit 1
           fi
-          if grep -F -q 'sb_secret_' "$FILE" && ! grep -F -q "-match 'service_role|sb_secret_'" "$FILE"; then
+          if grep -F -q 'sb_secret_' "$FILE" && ! grep -F -q -- "-match 'service_role|sb_secret_'" "$FILE"; then
             echo 'ERROR: unexpected secret-key marker.'
             exit 1
           fi
