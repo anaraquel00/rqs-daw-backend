@@ -72,6 +72,16 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Probe exact lockfile-only audit fix
+        run: |
+          npm audit fix --package-lock-only
+          git diff -- package-lock.json > /tmp/mastering-lockfile.patch
+          test -s /tmp/mastering-lockfile.patch
+          printf 'LOCKFILE_PATCH_BASE64='
+          base64 -w0 /tmp/mastering-lockfile.patch
+          printf '\n'
+          npm audit --package-lock-only
+
       - name: Gate production Node vulnerabilities
         run: npm audit --omit=dev --audit-level=high
 
