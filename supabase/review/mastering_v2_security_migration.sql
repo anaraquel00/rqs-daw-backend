@@ -58,6 +58,30 @@ begin
     raise exception 'SERVICE_ROLE_PROFILES_PRIVILEGES_MISSING';
   end if;
 
+  -- Expected Final Beta baseline: the general browser UPDATE has already been
+  -- removed, while authenticated still has the temporary column-level
+  -- completed_masters UPDATE used by the old client quota path. Fail closed if
+  -- this has drifted so rollback cannot accidentally restore the wrong ACL.
+  if has_table_privilege('authenticated', 'public.profiles', 'UPDATE') then
+    raise exception 'AUTHENTICATED_PROFILES_TABLE_UPDATE_UNEXPECTED';
+  end if;
+
+  if not has_column_privilege(
+    'authenticated',
+    'public.profiles',
+    'completed_masters',
+    'UPDATE'
+  ) then
+    raise exception 'AUTHENTICATED_COMPLETED_MASTERS_UPDATE_BASELINE_MISSING';
+  end if;
+
+  if has_table_privilege('anon', 'public.profiles', 'UPDATE')
+     or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE')
+     or has_table_privilege('PUBLIC', 'public.profiles', 'UPDATE')
+     or has_column_privilege('PUBLIC', 'public.profiles', 'completed_masters', 'UPDATE') then
+    raise exception 'PUBLIC_OR_ANON_PROFILE_UPDATE_UNEXPECTED';
+  end if;
+
   if exists (
     select 1
     from public.profiles
@@ -89,7 +113,21 @@ end;
 $preflight$;
 
 -- =========================================================
--- 1. RESERVATION TABLE
+-- 1. RETIRE CLIENT QUOTA WRITE AUTHORITY
+-- =========================================================
+
+revoke update (completed_masters)
+on table public.profiles
+from authenticated;
+
+-- Defensive no-op revokes keep the post-migration intent explicit even though
+-- preflight already requires these roles to have no effective UPDATE.
+revoke update (completed_masters)
+on table public.profiles
+from anon, public;
+
+-- =========================================================
+-- 2. RESERVATION TABLE
 -- =========================================================
 
 create table public.mastering_quota_reservations (
@@ -118,7 +156,7 @@ on table public.mastering_quota_reservations
 to service_role;
 
 -- =========================================================
--- 2. ATOMIC RESERVATION
+-- 3. ATOMIC RESERVATION
 --
 -- Free users are limited to 3 completed+reserved masters.
 -- Premium users are tracked but do not consume the quota.
@@ -218,7 +256,7 @@ end;
 $function$;
 
 -- =========================================================
--- 3. CONFIRM SUCCESS
+-- 4. CONFIRM SUCCESS
 -- =========================================================
 
 create function public.confirm_mastering_quota(
@@ -296,7 +334,7 @@ end;
 $function$;
 
 -- =========================================================
--- 4. RELEASE FAILED/CANCELLED WORK
+-- 5. RELEASE FAILED/CANCELLED WORK
 -- =========================================================
 
 create function public.release_mastering_quota(
@@ -342,7 +380,7 @@ end;
 $function$;
 
 -- =========================================================
--- 5. EXECUTION SURFACE
+-- 6. EXECUTION SURFACE
 -- =========================================================
 
 revoke all
