@@ -326,6 +326,17 @@ try {
         throw 'Quota-exhausted HTTP path changed completed_masters unexpectedly.'
     }
 
+    $serverErrorText = if (Test-Path $ServerStderr) {
+        Get-Content -LiteralPath $ServerStderr -Raw
+    }
+    else {
+        ''
+    }
+    if ($serverErrorText -match '\[MASTERING V2\] quota release failed\.') {
+        throw 'Quota-exhausted path attempted to release a reservation that was never acquired.'
+    }
+    Write-Host 'STAGING_HTTP_QUOTA_LOG_CLEAN: PASS'
+
     Write-Host 'MASTERING_V2_STAGING_HTTP_QUOTA: PASS'
     Write-Host 'S3_REQUESTS_PERFORMED: NONE'
     Write-Host 'PRODUCTION_REQUESTS_PERFORMED: NONE'
