@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { getAllowedOrigins } = require('./src/lib/runtime-config');
 const app = express();
 
 app.disable('x-powered-by');
@@ -19,11 +20,7 @@ app.use((req, res, next) => {
 });
 
 const corsOptions = {
-    origin: [
-        'http://localhost:4200',
-        'https://rqs-daw-frontend.vercel.app',
-        'https://studio.raquelsynths.com'
-    ],
+    origin: getAllowedOrigins(),
     allowedHeaders: ['Content-Type', 'Authorization']
 };
 
