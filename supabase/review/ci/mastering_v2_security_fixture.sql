@@ -11,6 +11,18 @@ create table public.profiles (
   completed_masters bigint not null default 0
 );
 
+-- Mirror the expected pre-Mastering-V2 Final Beta privilege boundary:
+-- authenticated users can read profiles and may update only their legacy
+-- completed_masters client counter; service_role has the server-side access
+-- required by the new quota RPCs. The migration must retire the client UPDATE.
+grant select
+on table public.profiles
+to authenticated;
+
+grant update (completed_masters)
+on table public.profiles
+to authenticated;
+
 grant select, update
 on table public.profiles
 to service_role;
