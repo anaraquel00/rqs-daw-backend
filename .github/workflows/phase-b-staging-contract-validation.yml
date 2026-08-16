@@ -1,0 +1,105 @@
+name: Phase B Staging Contract Validation
+
+on:
+  push:
+    branches:
+      - phase-b/staging-e2e-contract-20260816
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse remote staging validator with PowerShell 7
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/Test-MasteringV2RemoteStagingE2E.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host 'PHASE_B_REMOTE_STAGING_VALIDATOR_PARSE: PASS'
+
+      - name: Validate fail-closed staging boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          script='scripts/Test-MasteringV2RemoteStagingE2E.ps1'
+          contract='docs/MASTERING_V2_STAGING_E2E_CONTRACT.md'
+          runbook='docs/PRODUCTION_SMOKE_ROLLBACK_RUNBOOK.md'
+
+          grep -F -q 'AllowStagingObjectMutation' "$script"
+          grep -F -q 'AllowStagingCleanup' "$script"
+          grep -F -q 'amzn-rqs-bunker-sa' "$script"
+          grep -F -q 'uwrqbywapomuloresoek' "$script"
+          grep -F -q 'PAYMENT_DISABLED' "$script"
+          grep -F -q 'staging backend equals production backend' "$script"
+          grep -F -q 'staging bucket equals production bucket' "$script"
+          grep -F -q 'STAGING_OBJECT_MUTATION: NONE' "$script"
+
+          grep -F -q 'MASTERING_V2_ISOLATED_STAGING_E2E: PASS' "$contract"
+          grep -F -q 'STAGING_PRODUCTION_BUCKET_ACCESS: NONE' "$contract"
+          grep -F -q 'COORDINATED ROLLBACK' "$runbook"
+          grep -F -q 'AUTO-MERGE: FORBIDDEN' "$runbook"
+
+          echo 'PHASE_B_FAIL_CLOSED_BOUNDARIES: PASS'
+
+      - name: Prove mutation guard precedes S3 PUT
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('scripts/Test-MasteringV2RemoteStagingE2E.ps1').read_text(encoding='utf-8')
+          guard = text.index("if (-not $AllowStagingObjectMutation)")
+          put = text.index('Invoke-WebRequest -Method PUT')
+          if guard >= put:
+              raise SystemExit('Object-mutation guard does not precede S3 PUT.')
+          forbidden = (
+              'aws s3api create-bucket',
+              'aws iam create-role',
+              'aws iam put-role-policy',
+              'aws lambda create-function',
+              'aws lambda update-function',
+              'vercel deploy',
+              'vercel promote',
+          )
+          lowered = text.lower()
+          for marker in forbidden:
+              if marker in lowered:
+                  raise SystemExit(f'Provisioning mutation unexpectedly present: {marker}')
+          print('PHASE_B_OBJECT_MUTATION_GUARD_ORDER: PASS')
+          print('PHASE_B_PROVISIONING_MUTATION_COMMANDS: NONE')
+          PY
+
+      - name: Scan staged artifacts for credential values
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            scripts/Test-MasteringV2RemoteStagingE2E.ps1
+            docs/MASTERING_V2_STAGING_E2E_CONTRACT.md
+            docs/PRODUCTION_SMOKE_ROLLBACK_RUNBOOK.md
+          )
+          if grep -E -n 'sk_live_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|sb_secret_[A-Za-z0-9_-]{10,}|AWS_SECRET_ACCESS_KEY[[:space:]]*=[[:space:]]*[^<[:space:]][^[:space:]]*' "${files[@]}"; then
+            echo 'ERROR: credential-like value found in Phase B artifacts.'
+            exit 1
+          fi
+          echo 'PHASE_B_SECRET_VALUE_SCAN: PASS'
+
+      - name: Contract verdict
+        run: |
+          echo 'PHASE_B_STAGING_E2E_CONTRACT: PASS'
+          echo 'PHASE_B_PRODUCTION_SMOKE_ROLLBACK_RUNBOOK: PASS'
+          echo 'CLOUD_MUTATION: NONE'
+          echo 'PRODUCTION_MUTATION: NONE'
