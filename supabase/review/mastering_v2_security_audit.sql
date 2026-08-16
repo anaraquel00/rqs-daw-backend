@@ -23,7 +23,13 @@ where schemaname = 'public'
 select
   has_table_privilege('service_role', 'public.profiles', 'SELECT')
     and has_table_privilege('service_role', 'public.profiles', 'UPDATE')
-    as service_role_profiles_access_present;
+    as service_role_profiles_access_present,
+  not has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.profiles', 'completed_masters', 'UPDATE')
+    as authenticated_quota_write_denied,
+  not has_table_privilege('anon', 'public.profiles', 'UPDATE')
+    and not has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE')
+    as anon_quota_write_denied;
 
 select
   not has_table_privilege('anon', 'public.mastering_quota_reservations', 'SELECT')
