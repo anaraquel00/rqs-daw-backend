@@ -8,28 +8,58 @@ select
     as reservation_table_present;
 
 select
+  c.relrowsecurity as profiles_rls_enabled
+from pg_class as c
+join pg_namespace as n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relname = 'profiles';
+
+select
   c.relrowsecurity as reservation_rls_enabled
 from pg_class as c
 join pg_namespace as n on n.oid = c.relnamespace
-where n.nspname = 'public'
-  and c.relname = 'mastering_quota_reservations';
+where n.nspname = 'public' and c.relname = 'mastering_quota_reservations';
 
 select
   count(*) = 0 as reservation_policies_absent
 from pg_policies
-where schemaname = 'public'
-  and tablename = 'mastering_quota_reservations';
+where schemaname = 'public' and tablename = 'mastering_quota_reservations';
 
+-- Browser roles must be read-only against profiles after migration.
 select
   has_table_privilege('service_role', 'public.profiles', 'SELECT')
     and has_table_privilege('service_role', 'public.profiles', 'UPDATE')
     as service_role_profiles_access_present,
-  not has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+  has_table_privilege('authenticated', 'public.profiles', 'SELECT')
+    as authenticated_profile_read_present,
+  not has_table_privilege('authenticated', 'public.profiles', 'INSERT')
+    and not has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+    and not has_table_privilege('authenticated', 'public.profiles', 'DELETE')
+    and not has_table_privilege('authenticated', 'public.profiles', 'TRUNCATE')
+    as authenticated_profile_writes_denied,
+  not has_table_privilege('anon', 'public.profiles', 'INSERT')
+    and not has_table_privilege('anon', 'public.profiles', 'UPDATE')
+    and not has_table_privilege('anon', 'public.profiles', 'DELETE')
+    and not has_table_privilege('anon', 'public.profiles', 'TRUNCATE')
+    as anon_profile_writes_denied,
+  not has_column_privilege('authenticated', 'public.profiles', 'role', 'UPDATE')
     and not has_column_privilege('authenticated', 'public.profiles', 'completed_masters', 'UPDATE')
-    as authenticated_quota_write_denied,
-  not has_table_privilege('anon', 'public.profiles', 'UPDATE')
-    and not has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE')
-    as anon_quota_write_denied;
+    as authenticated_security_columns_write_denied;
+
+select
+  count(*) = 0 as profile_update_policies_absent
+from pg_policies
+where schemaname = 'public'
+  and tablename = 'profiles'
+  and cmd = 'UPDATE';
+
+select
+  count(*) = 1 as owner_select_policy_present
+from pg_policies
+where schemaname = 'public'
+  and tablename = 'profiles'
+  and cmd = 'SELECT'
+  and policyname = 'Usuários autenticados leem o próprio perfil'
+  and roles = array['authenticated']::name[];
 
 select
   not has_table_privilege('anon', 'public.mastering_quota_reservations', 'SELECT')
@@ -49,49 +79,21 @@ select
     as service_role_table_dml_present;
 
 select
-  to_regprocedure('public.reserve_mastering_quota(uuid,uuid)') is not null
-    as reserve_rpc_present,
-  to_regprocedure('public.confirm_mastering_quota(uuid,uuid)') is not null
-    as confirm_rpc_present,
-  to_regprocedure('public.release_mastering_quota(uuid,uuid)') is not null
-    as release_rpc_present;
+  to_regprocedure('public.reserve_mastering_quota(uuid,uuid)') is not null as reserve_rpc_present,
+  to_regprocedure('public.confirm_mastering_quota(uuid,uuid)') is not null as confirm_rpc_present,
+  to_regprocedure('public.release_mastering_quota(uuid,uuid)') is not null as release_rpc_present;
 
 select
   count(*) = 3 as exact_mastering_rpc_count,
   coalesce(bool_and(not p.prosecdef), false) as all_security_invoker,
-  coalesce(bool_and(p.proconfig = array['search_path=""']::text[]), false)
-    as all_fixed_empty_search_path,
-  coalesce(bool_and(not has_function_privilege('anon', p.oid, 'EXECUTE')), false)
-    as anon_execute_denied,
-  coalesce(bool_and(not has_function_privilege('authenticated', p.oid, 'EXECUTE')), false)
-    as authenticated_execute_denied,
-  coalesce(bool_and(has_function_privilege('service_role', p.oid, 'EXECUTE')), false)
-    as service_role_execute_present
+  coalesce(bool_and(p.proconfig = array['search_path=""']::text[]), false) as all_fixed_empty_search_path,
+  coalesce(bool_and(not has_function_privilege('anon', p.oid, 'EXECUTE')), false) as anon_execute_denied,
+  coalesce(bool_and(not has_function_privilege('authenticated', p.oid, 'EXECUTE')), false) as authenticated_execute_denied,
+  coalesce(bool_and(has_function_privilege('service_role', p.oid, 'EXECUTE')), false) as service_role_execute_present
 from pg_proc as p
 join pg_namespace as n on n.oid = p.pronamespace
 where n.nspname = 'public'
-  and p.proname in (
-    'reserve_mastering_quota',
-    'confirm_mastering_quota',
-    'release_mastering_quota'
-  );
-
-select
-  p.proname,
-  p.prosecdef as security_definer,
-  p.proconfig,
-  has_function_privilege('anon', p.oid, 'EXECUTE') as anon_execute,
-  has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_execute,
-  has_function_privilege('service_role', p.oid, 'EXECUTE') as service_role_execute
-from pg_proc as p
-join pg_namespace as n on n.oid = p.pronamespace
-where n.nspname = 'public'
-  and p.proname in (
-    'reserve_mastering_quota',
-    'confirm_mastering_quota',
-    'release_mastering_quota'
-  )
-order by p.proname;
+  and p.proname in ('reserve_mastering_quota', 'confirm_mastering_quota', 'release_mastering_quota');
 
 select
   count(*) = 0 as invalid_profile_mastering_state
