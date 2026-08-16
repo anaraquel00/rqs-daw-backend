@@ -1,0 +1,19 @@
+[
+  {
+    "AllowedHeaders": [
+      "Content-Type"
+    ],
+    "AllowedMethods": [
+      "PUT",
+      "GET",
+      "HEAD"
+    ],
+    "AllowedOrigins": [
+      "<EXACT_STAGING_FRONTEND_ORIGIN>"
+    ],
+    "ExposeHeaders": [
+      "ETag"
+    ],
+    "MaxAgeSeconds": 3000
+  }
+]
