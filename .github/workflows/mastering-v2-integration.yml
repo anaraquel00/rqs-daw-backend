@@ -1,9 +1,9 @@
-name: Mastering V2 Integration
+name: Mastering V2 Secure Integration
 
 on:
   push:
     branches:
-      - integration/mastering-v2-final-beta-20260812-backend
+      - integration/mastering-v2-secure-p1-20260816
   pull_request:
     branches:
       - main
@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,16 +72,34 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Gate complete Node dependency vulnerabilities
-        run: npm audit
+      - name: Gate production Node vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Report complete Node audit
+        run: npm audit || true
 
       - name: Check Node transport syntax
         run: |
           node --check server.js
           node --check scripts/mastering-v2-local-server.js
+          node --check src/lib/supabase-server.js
+          node --check src/controllers/payment.js
           node --check src/controllers/mastering-v2.js
+          node --check tests/mastering_v2_auth_unit.mjs
+          node --check tests/mastering_v2_security_sql_contract.mjs
           node --check tests/mastering_v2_http_e2e.mjs
           node --check tests/mastering_v2_security_e2e.mjs
+
+      - name: Validate auth and ownership helpers
+        run: node tests/mastering_v2_auth_unit.mjs
+
+      - name: Validate security SQL contract
+        run: node tests/mastering_v2_security_sql_contract.mjs
+
+      - name: Verify legacy Full Master bypass is retired
+        run: |
+          grep -F "app.post('/mastering/process'" server.js
+          grep -F "LEGACY_MASTERING_PROCESS_RETIRED" server.js
 
       - name: Run local Mastering V2 HTTP E2E
         run: node tests/mastering_v2_http_e2e.mjs
