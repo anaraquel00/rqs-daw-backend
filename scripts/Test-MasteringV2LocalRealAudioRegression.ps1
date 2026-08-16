@@ -1,7 +1,8 @@
 #requires -Version 7.0
 param(
     [string]$InputRoot = 'D:\RQS-Dev\real_audio_ab\input\Testes RQS DAW',
-    [string]$InputFile = ''
+    [string]$InputFile = '',
+    [double]$PreviewStart = [double]::NaN
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +29,6 @@ $ManifestPath = Join-Path $EvidenceDir 'EVIDENCE.txt'
 $EvidenceZip = Join-Path $RunDir 'real_audio_evidence.zip'
 $Port = 18083
 $BaseUrl = "http://127.0.0.1:$Port"
-$PreviewStart = 290.0
 $ServerProcess = $null
 $RunStarted = Get-Date
 $TempBefore = @()
@@ -117,19 +117,40 @@ $Inventory = Get-ChildItem -LiteralPath $InputRoot -Recurse -File -ErrorAction S
 if ($Inventory.Count -eq 0) { throw 'No real-audio files found in the configured input root.' }
 $Inventory | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
 
+$SelectionPolicy = 'EXPLICIT_INPUT'
+
 if ([string]::IsNullOrWhiteSpace($InputFile)) {
+    # Current canonical real-audio order for this project:
+    # PRIMARY: Lockdown Protocol 145-175 s
+    # BACKUP: Cybernetic Grid 285-315 s
+    # Historical HUSARIA/Kwiat premaster windows remain fallback-only.
+    $Lockdown = @($Inventory | Where-Object { $_.Name -match '(?i)^4-Lockdown Protocol\.wav$' })
+    $Cybernetic = @($Inventory | Where-Object { $_.Name -match '(?i)^7-Cybernetic Grid.*\.wav$' })
     $Husaria = @($Inventory | Where-Object { $_.Name -match '(?i)HUSARIA.*Premaster.*\.wav$' })
-    if ($Husaria.Count -eq 1) {
+    $Kwiat = @($Inventory | Where-Object { $_.Name -match '(?i)Kwiat.*Premaster.*\.wav$' })
+
+    if ($Lockdown.Count -eq 1) {
+        $InputFile = $Lockdown[0].FullName
+        if ([double]::IsNaN($PreviewStart)) { $PreviewStart = 145.0 }
+        $SelectionPolicy = 'LOCKDOWN_PRIMARY_145_175'
+    }
+    elseif ($Cybernetic.Count -eq 1) {
+        $InputFile = $Cybernetic[0].FullName
+        if ([double]::IsNaN($PreviewStart)) { $PreviewStart = 285.0 }
+        $SelectionPolicy = 'CYBERNETIC_BACKUP_285_315'
+    }
+    elseif ($Husaria.Count -eq 1) {
         $InputFile = $Husaria[0].FullName
+        if ([double]::IsNaN($PreviewStart)) { $PreviewStart = 290.0 }
+        $SelectionPolicy = 'HUSARIA_FALLBACK_290_310'
+    }
+    elseif ($Kwiat.Count -eq 1) {
+        $InputFile = $Kwiat[0].FullName
+        if ([double]::IsNaN($PreviewStart)) { $PreviewStart = 270.0 }
+        $SelectionPolicy = 'KWIAT_FALLBACK_270_290'
     }
     else {
-        $Kwiat = @($Inventory | Where-Object { $_.Name -match '(?i)Kwiat.*Premaster.*\.wav$' })
-        if ($Kwiat.Count -eq 1) {
-            $InputFile = $Kwiat[0].FullName
-        }
-        else {
-            throw 'Could not select one unambiguous HUSARIA/Kwiat premaster. Re-run with -InputFile <full path>.'
-        }
+        throw 'Could not select one unambiguous validated WAV. Re-run with -InputFile <full path> -PreviewStart <seconds>.'
     }
 }
 
@@ -137,7 +158,32 @@ $InputFile = (Resolve-Path -LiteralPath $InputFile).Path
 if ([IO.Path]::GetExtension($InputFile).ToLowerInvariant() -ne '.wav') {
     throw 'This regression gate currently requires a WAV premaster.'
 }
+
+if ([double]::IsNaN($PreviewStart)) {
+    $SelectedName = [IO.Path]::GetFileName($InputFile)
+    if ($SelectedName -match '(?i)^4-Lockdown Protocol\.wav$') {
+        $PreviewStart = 145.0
+        $SelectionPolicy = 'EXPLICIT_LOCKDOWN_145_175'
+    }
+    elseif ($SelectedName -match '(?i)^7-Cybernetic Grid.*\.wav$') {
+        $PreviewStart = 285.0
+        $SelectionPolicy = 'EXPLICIT_CYBERNETIC_285_315'
+    }
+    elseif ($SelectedName -match '(?i)HUSARIA.*Premaster.*\.wav$') {
+        $PreviewStart = 290.0
+        $SelectionPolicy = 'EXPLICIT_HUSARIA_290_310'
+    }
+    elseif ($SelectedName -match '(?i)Kwiat.*Premaster.*\.wav$') {
+        $PreviewStart = 270.0
+        $SelectionPolicy = 'EXPLICIT_KWIAT_270_290'
+    }
+    else {
+        throw 'PreviewStart cannot be inferred for the explicit input. Re-run with -PreviewStart <seconds>.'
+    }
+}
+
 Write-Host "SELECTED_REAL_AUDIO: $InputFile"
+Write-Host "REAL_AUDIO_SELECTION_POLICY: $SelectionPolicy"
 Write-Host "PREVIEW_WINDOW_START_SECONDS: $PreviewStart"
 
 New-Item -ItemType Directory -Force -Path $RunDir, $ExtractDir, $EvidenceDir | Out-Null
@@ -385,6 +431,7 @@ sys.exit(0 if report['status'] == 'PASS' else 2)
         "CANONICAL_STANDALONE_HEAD: $StandaloneHead",
         "INPUT: $InputFile",
         "PREVIEW_START_SECONDS: $PreviewStart",
+        "REAL_AUDIO_SELECTION_POLICY: $SelectionPolicy",
         'DESTINATION: streaming',
         'PLATFORM: soundcloud',
         'ATMOSPHERE: clear_sky',
