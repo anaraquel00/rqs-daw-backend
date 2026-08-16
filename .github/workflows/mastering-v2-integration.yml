@@ -17,6 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: postgres
+      PGUSER: postgres
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -52,7 +69,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install -r requirements.txt
-          python -m pip install pytest pip-audit
+          python -m pip install pytest pip-audit pglast==8.4
 
       - name: Gate Python dependency vulnerabilities
         run: python -m pip_audit --progress-spinner off
@@ -62,6 +79,73 @@ jobs:
 
       - name: Validate V2 capabilities CLI
         run: python -m src.controllers.mastering_v2_cli capabilities
+
+      - name: Parse Mastering V2 review SQL
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from pglast import parse_sql
+
+          root = Path('supabase/review')
+          files = (
+              'ci/mastering_v2_security_fixture.sql',
+              'mastering_v2_security_migration.sql',
+              'mastering_v2_security_audit.sql',
+              'mastering_v2_security_tests.sql',
+              'mastering_v2_security_rollback.sql',
+          )
+          for name in files:
+              parse_sql((root / name).read_text(encoding='utf-8'))
+              print(f'SQL PARSE PASS: {name}')
+          PY
+
+      - name: Execute Mastering V2 migration and SQL tests in ephemeral PostgreSQL
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_security_fixture.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_migration.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_tests.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_audit.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $assert$
+          begin
+            if to_regclass('public.mastering_quota_reservations') is null then
+              raise exception 'CI_RESERVATION_TABLE_MISSING';
+            end if;
+
+            if exists (
+              select 1
+              from pg_proc p
+              join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public'
+                and p.proname in (
+                  'reserve_mastering_quota',
+                  'confirm_mastering_quota',
+                  'release_mastering_quota'
+                )
+                and (
+                  p.prosecdef
+                  or p.proconfig is distinct from array['search_path=']::text[]
+                  or has_function_privilege('anon', p.oid, 'EXECUTE')
+                  or has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                  or not has_function_privilege('service_role', p.oid, 'EXECUTE')
+                )
+            ) then
+              raise exception 'CI_MASTERING_RPC_SECURITY_CONTRACT_FAILED';
+            end if;
+
+            if exists (
+              select 1
+              from public.mastering_quota_reservations
+              where user_id in (
+                'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid,
+                'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2'::uuid
+              )
+            ) then
+              raise exception 'CI_MASTERING_FIXTURE_CLEANUP_FAILED';
+            end if;
+          end;
+          $assert$;
+          SQL
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
