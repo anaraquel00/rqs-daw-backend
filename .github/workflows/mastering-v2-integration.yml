@@ -89,6 +89,9 @@ jobs:
           root = Path('supabase/review')
           files = (
               'ci/mastering_v2_security_fixture.sql',
+              'ci/mastering_v2_staging_fixture.sql',
+              'mastering_v2_staging_baseline.sql',
+              'mastering_v2_staging_baseline_rollback.sql',
               'mastering_v2_security_migration.sql',
               'mastering_v2_security_audit.sql',
               'mastering_v2_security_tests.sql',
@@ -99,12 +102,13 @@ jobs:
               print(f'SQL PARSE PASS: {name}')
           PY
 
-      - name: Execute Mastering V2 migration, tests, audit and rollback in ephemeral PostgreSQL
+      - name: Validate observed production ACL migration path
         run: |
           psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_security_fixture.sql
           psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_migration.sql
           psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_tests.sql
           psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_audit.sql
+
           psql -v ON_ERROR_STOP=1 <<'SQL'
           do $assert$
           begin
@@ -112,11 +116,20 @@ jobs:
               raise exception 'CI_RESERVATION_TABLE_MISSING';
             end if;
 
-            if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+            if has_table_privilege('authenticated', 'public.profiles', 'INSERT')
+               or has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+               or has_table_privilege('authenticated', 'public.profiles', 'DELETE')
+               or has_column_privilege('authenticated', 'public.profiles', 'role', 'UPDATE')
                or has_column_privilege('authenticated', 'public.profiles', 'completed_masters', 'UPDATE')
-               or has_table_privilege('anon', 'public.profiles', 'UPDATE')
-               or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
-              raise exception 'CI_CLIENT_QUOTA_WRITE_AUTHORITY_NOT_RETIRED';
+               or has_table_privilege('anon', 'public.profiles', 'UPDATE') then
+              raise exception 'CI_BROWSER_PROFILE_WRITE_AUTHORITY_NOT_RETIRED';
+            end if;
+
+            if exists (
+              select 1 from pg_policies
+              where schemaname='public' and tablename='profiles' and cmd='UPDATE'
+            ) then
+              raise exception 'CI_PROFILE_UPDATE_POLICY_REMAINS';
             end if;
 
             if exists (
@@ -138,17 +151,6 @@ jobs:
                 )
             ) then
               raise exception 'CI_MASTERING_RPC_SECURITY_CONTRACT_FAILED';
-            end if;
-
-            if exists (
-              select 1
-              from public.mastering_quota_reservations
-              where user_id in (
-                'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid,
-                'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2'::uuid
-              )
-            ) then
-              raise exception 'CI_MASTERING_FIXTURE_CLEANUP_FAILED';
             end if;
           end;
           $assert$;
@@ -173,22 +175,65 @@ jobs:
               raise exception 'CI_ROLLBACK_RESTORED_TABLE_LEVEL_UPDATE';
             end if;
 
-            if not has_column_privilege(
-              'authenticated',
-              'public.profiles',
-              'completed_masters',
-              'UPDATE'
-            ) then
-              raise exception 'CI_ROLLBACK_LEGACY_COLUMN_UPDATE_NOT_RESTORED';
+            if not has_column_privilege('authenticated','public.profiles','completed_masters','UPDATE')
+               or has_column_privilege('authenticated','public.profiles','role','UPDATE') then
+              raise exception 'CI_ROLLBACK_SAFE_LEGACY_COLUMN_ACL_FAILED';
             end if;
 
-            if has_table_privilege('anon', 'public.profiles', 'UPDATE')
-               or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
+            if (select count(*) from pg_policies
+                where schemaname='public' and tablename='profiles' and cmd='UPDATE'
+                  and policyname='Permitir que usuários atualizem seus próprios perfis') <> 1 then
+              raise exception 'CI_ROLLBACK_OWN_PROFILE_UPDATE_POLICY_MISSING';
+            end if;
+
+            if has_table_privilege('anon', 'public.profiles', 'UPDATE') then
               raise exception 'CI_ROLLBACK_ANON_UPDATE_EXPOSED';
             end if;
           end;
           $rollback_assert$;
           SQL
+
+      - name: Validate observed isolated staging alignment path
+        run: |
+          createdb mastering_staging_ci
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_staging_fixture.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_baseline.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_migration.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_tests.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_audit.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_rollback.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_baseline_rollback.sql
+
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $staging_rollback_assert$
+          begin
+            if exists (
+              select 1 from information_schema.columns
+              where table_schema='public' and table_name='profiles'
+                and column_name in ('email','completed_masters')
+            ) then
+              raise exception 'CI_STAGING_BASELINE_ROLLBACK_COLUMNS_REMAIN';
+            end if;
+
+            if (select c.relrowsecurity from pg_class c
+                join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname='profiles') then
+              raise exception 'CI_STAGING_BASELINE_ROLLBACK_RLS_REMAINS';
+            end if;
+
+            if (select count(*) from pg_policies
+                where schemaname='public' and tablename='profiles') <> 0 then
+              raise exception 'CI_STAGING_BASELINE_ROLLBACK_POLICIES_REMAIN';
+            end if;
+
+            if (select count(*) from public.profiles) <> 1 then
+              raise exception 'CI_STAGING_UPLINK_SYNTHETIC_PROFILE_NOT_PRESERVED';
+            end if;
+          end;
+          $staging_rollback_assert$;
+          SQL
+
+          dropdb mastering_staging_ci
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
