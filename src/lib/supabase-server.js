@@ -51,15 +51,17 @@ async function supabaseFetch(pathname, {
   extraHeaders = {},
 } = {}) {
   const { url, secretKey } = getSupabaseConfig();
-  const authToken = admin ? secretKey : userToken;
-
   const headers = {
     apikey: secretKey,
     ...extraHeaders,
   };
 
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
+  if (userToken) {
+    headers.Authorization = `Bearer ${userToken}`;
+  } else if (admin && secretKey.split('.').length === 3) {
+    // Legacy service_role keys are JWTs. New sb_secret_* keys are not JWTs
+    // and must be sent through the apikey header only.
+    headers.Authorization = `Bearer ${secretKey}`;
   }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
