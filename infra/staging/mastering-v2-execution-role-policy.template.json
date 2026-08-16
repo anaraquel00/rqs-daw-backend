@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MasteringV2UploadObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::<DEDICATED_STAGING_BUCKET>/uploads/*"
+    },
+    {
+      "Sid": "MasteringV2MasterObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::<DEDICATED_STAGING_BUCKET>/masters/*"
+    }
+  ]
+}
