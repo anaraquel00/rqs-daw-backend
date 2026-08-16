@@ -1,6 +1,6 @@
 # Mastering V2 Project 1 — Staging Validation Gate
 
-Status: OPEN  
+Status: IN PROGRESS — database/auth/HTTP/quota gates PASS; S3/real-audio OPEN  
 Target: isolated Supabase staging + non-production backend/frontend staging
 
 ## Confirmed baseline evidence — 2026-08-16
@@ -17,97 +17,113 @@ Production `public.profiles` was inspected read-only before any Mastering V2 SQL
 - no null/negative `completed_masters`
 - `auth.users` has `on_auth_user_created -> public.handle_new_user()`
 
-The isolated `rqs-daw-staging` project is intentionally not production-shaped because it was created for Uplink validation:
+The isolated `rqs-daw-staging` project was initially not production-shaped because it was created for Uplink validation. A reviewed staging-only baseline alignment was applied before the Mastering V2 security migration. No production user data was copied.
 
-- profiles columns: `id`, `role`, `monthly_clicks`, `click_quota`
-- `completed_masters` and `email` absent
-- RLS disabled / policies absent
-- one synthetic premium Uplink profile
-- no staging auth users
+## Closed staging gates
 
-Therefore the Mastering staging path is explicitly:
-
-1. apply `mastering_v2_staging_baseline.sql` to isolated staging only
-2. verify the baseline-alignment proof
-3. apply `mastering_v2_security_migration.sql`
-4. run the read-only audit
-5. run native multi-session quota concurrency
-6. run authenticated HTTP/frontend staging validation
-7. run real-audio regression
-
-`mastering_v2_staging_baseline.sql` and `mastering_v2_staging_baseline_rollback.sql` are **STAGING ONLY / NEVER PRODUCTION**.
-
-## Required PASS evidence
-
-### Database
+### Database / security — PASS
 
 - staging baseline alignment preflight PASS
 - `completed_masters` present after alignment
-- profiles RLS enabled after alignment
+- profiles RLS enabled
 - browser profile writes denied
 - authenticated owner read preserved
-- migration preflight PASS
+- Mastering V2 migration PASS
 - reservation table RLS enabled
 - no anon/authenticated access to reservation table
-- reserve/confirm/release RPCs are SECURITY INVOKER
-- fixed empty search_path
-- service_role execute only
+- reserve/confirm/release RPCs SECURITY INVOKER with fixed empty search_path
+- service-role-only execution surface
 - role/completed_masters state valid
-- read-only security audit PASS
+- read-only Audit After PASS
+- SQL functional fixture + cleanup PASS
 
-### Quota concurrency
+### Native quota concurrency — PASS
 
-Use independent database sessions, not sequential calls in one session.
+Validated with 8 independent PostgreSQL sessions:
 
-Free profile fixture:
-- `completed_masters = 2`
-- start multiple reserve calls concurrently
-- exactly one request may reserve the final Free slot
-- all remaining concurrent requests must fail with quota exceeded
-- a released failed job must make the slot available again
-- a successful confirmation must increment completed_masters exactly once
-- duplicate confirmation must not increment again
+- Free 2/3: exactly 1 accepted + 7 `MASTERING_QUOTA_EXCEEDED`
+- release reopens the final slot
+- confirm increments exactly once
+- duplicate confirm does not increment again
+- Premium: 8/8 accepted, counter unchanged
+- cleanup PASS
 
-Premium profile fixture:
-- concurrent reservations allowed by mastering quota policy
-- completed_masters must not be changed by the V2 quota functions
+### Real staging Auth/JWT — PASS
 
-### HTTP / auth
+- real disposable staging identity created and e-mail confirmed
+- signup trigger creates `profiles` row as `free / completed_masters=0`
+- real JWT verified by staging Supabase Auth
+- authenticated owner profile SELECT PASS
+- browser attempt to update protected profile fields denied
+- browser direct quota RPC denied
 
-Product policy is confirmed, not open:
+### Real candidate HTTP auth / ownership — PASS
+
+Using the actual candidate Express controller with the real staging JWT:
+
+- no auth -> 401
+- invalid JWT -> 401
+- legacy `/mastering/process` -> 410
+- foreign user's S3 key -> 403
+- path-escape S3 key -> 400
+- no S3 requests performed in this gate
+- no production requests performed
+
+### Real candidate HTTP quota / failure semantics — PASS
+
+Validated against real staging quota RPCs using the retained staging identity and server-only staging key:
+
+- Free 2/3 reserve succeeds
+- controlled pre-S3 failure releases reservation
+- `completed_masters` remains unchanged after failed Full Master
+- Free 3/3 returns 429 `MASTERING_QUOTA_EXCEEDED` before S3
+- no active reservation remains
+- quota-rejection path no longer emits the stale `quota release failed` cleanup warning
+- `STAGING_HTTP_QUOTA_LOG_CLEAN: PASS`
+- staging identity restored to original state
+- test reservations cleanup PASS
+- retained `server.stderr.log` empty
+
+## Product policy — CONFIRMED
+
 - login is required before Preview and Full Master
 - Preview never consumes Full Master quota
 - Free Final Beta quota is 3 Full Masters total; no 30-day/monthly reset
 - after 3/3 Preview remains available, Full Master is blocked and PRO waitlist is shown
 
-Validation:
-- capabilities 200 without login
-- V2 presigned upload without Bearer token -> 401
-- V2 process without Bearer token -> 401
-- invalid/expired user token -> 401
-- another user's S3 key -> 403
-- authenticated upload key contains only authenticated user id namespace
-- Preview succeeds and does not consume Full Master quota
-- Full Master at Free 2/3 reserves and confirms one slot
-- Free 3/3 -> 429
-- failed Full Master releases its reservation
-- legacy `/mastering/process` -> 410
-- no raw token/server key in application logs
+## Remaining staging gates
 
-### Frontend follow-up
+### Dedicated non-production S3 — OPEN / REQUIRED
+
+Before any real staging upload:
+
+- create/provision a dedicated non-production S3 bucket or equivalent isolated storage namespace
+- production bucket must not be usable from staging
+- staging backend must use explicit `RQS_MASTERING_V2_STORAGE_ENV=staging`
+- staging bucket must be explicit in `RQS_MASTERING_V2_BUCKET_NAME`
+- validate block-public-access / ownership / upload-download-delete path
+- no production storage object may be touched by staging tests
+
+### Frontend authenticated integration — OPEN
 
 - authenticated session token sent only to RQS backend V2 endpoints
 - use `/mastering/v2/presigned-url`
-- frontend no longer increments completed_masters as authoritative quota state
-- profile is refreshed after confirmed Full Master
-- login requirement is represented in UI before Preview/Full Master
+- frontend no longer increments `completed_masters` as authoritative quota state
+- profile refreshed after confirmed Full Master
+- login requirement represented in UI before Preview/Full Master
 - Preview and A/B behavior unchanged
 
-### Real audio
+### Real audio — OPEN / REQUIRED
 
 - selected 15-second Preview window exactness
+- real staging upload/download path
+- successful Full Master increments quota exactly once
+- failed Full Master releases quota
+- output key namespaced by authenticated user id
 - final Full Master output compared against validated V2 behavior
 - no unexplained DSP regression
 - output downloadable and playable
+
+## Release rule
 
 No production rollout is allowed until all applicable staging gates above are PASS and explicitly reviewed.
