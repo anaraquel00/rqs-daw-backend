@@ -10,12 +10,24 @@ function assertIncludes(value, message) {
 }
 
 assertIncludes(
-  'AUTHENTICATED_COMPLETED_MASTERS_UPDATE_BASELINE_MISSING',
-  'Expected legacy completed_masters ACL preflight is missing.',
+  'UNEXPECTED_PROFILE_UPDATE_POLICY',
+  'Production UPDATE policy fail-closed preflight is missing.',
 );
 assertIncludes(
-  'revoke update (completed_masters)',
-  'Client completed_masters UPDATE retirement is missing.',
+  'revoke insert, update, delete, truncate',
+  'Browser profile write retirement is missing.',
+);
+assertIncludes(
+  'from anon, authenticated, public',
+  'Browser profile revoke matrix is missing.',
+);
+assertIncludes(
+  'drop policy if exists "Permitir que usuários atualizem seus próprios perfis"',
+  'Legacy own-profile UPDATE policy retirement is missing.',
+);
+assertIncludes(
+  'grant select\non table public.profiles\nto authenticated',
+  'Authenticated profile read preservation is missing.',
 );
 assertIncludes(
   'create table public.mastering_quota_reservations',
