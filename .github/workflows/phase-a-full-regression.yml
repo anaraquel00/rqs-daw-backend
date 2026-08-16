@@ -107,6 +107,15 @@ jobs:
           PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_baseline_rollback.sql
           dropdb mastering_staging_ci
 
+      - name: Reset ephemeral cluster roles before Auth fixture
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          drop owned by anon, authenticated, service_role;
+          drop role anon;
+          drop role authenticated;
+          drop role service_role;
+          SQL
+
       - name: Validate Auth profile hardening SQL
         run: |
           createdb mastering_auth_ci
@@ -115,6 +124,11 @@ jobs:
           PGDATABASE=mastering_auth_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_audit.sql
           PGDATABASE=mastering_auth_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_hardening_rollback.sql
           dropdb mastering_auth_ci
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          drop role anon;
+          drop role authenticated;
+          drop role service_role;
+          SQL
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
