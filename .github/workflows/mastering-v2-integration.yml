@@ -99,7 +99,7 @@ jobs:
               print(f'SQL PARSE PASS: {name}')
           PY
 
-      - name: Execute Mastering V2 migration and SQL tests in ephemeral PostgreSQL
+      - name: Execute Mastering V2 migration, tests, audit and rollback in ephemeral PostgreSQL
         run: |
           psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_security_fixture.sql
           psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_migration.sql
@@ -110,6 +110,13 @@ jobs:
           begin
             if to_regclass('public.mastering_quota_reservations') is null then
               raise exception 'CI_RESERVATION_TABLE_MISSING';
+            end if;
+
+            if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+               or has_column_privilege('authenticated', 'public.profiles', 'completed_masters', 'UPDATE')
+               or has_table_privilege('anon', 'public.profiles', 'UPDATE')
+               or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
+              raise exception 'CI_CLIENT_QUOTA_WRITE_AUTHORITY_NOT_RETIRED';
             end if;
 
             if exists (
@@ -145,6 +152,42 @@ jobs:
             end if;
           end;
           $assert$;
+          SQL
+
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_rollback.sql
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $rollback_assert$
+          begin
+            if to_regclass('public.mastering_quota_reservations') is not null then
+              raise exception 'CI_ROLLBACK_RESERVATION_TABLE_REMAINS';
+            end if;
+
+            if to_regprocedure('public.reserve_mastering_quota(uuid,uuid)') is not null
+               or to_regprocedure('public.confirm_mastering_quota(uuid,uuid)') is not null
+               or to_regprocedure('public.release_mastering_quota(uuid,uuid)') is not null then
+              raise exception 'CI_ROLLBACK_RPC_REMAINS';
+            end if;
+
+            if has_table_privilege('authenticated', 'public.profiles', 'UPDATE') then
+              raise exception 'CI_ROLLBACK_RESTORED_TABLE_LEVEL_UPDATE';
+            end if;
+
+            if not has_column_privilege(
+              'authenticated',
+              'public.profiles',
+              'completed_masters',
+              'UPDATE'
+            ) then
+              raise exception 'CI_ROLLBACK_LEGACY_COLUMN_UPDATE_NOT_RESTORED';
+            end if;
+
+            if has_table_privilege('anon', 'public.profiles', 'UPDATE')
+               or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
+              raise exception 'CI_ROLLBACK_ANON_UPDATE_EXPOSED';
+            end if;
+          end;
+          $rollback_assert$;
           SQL
 
       - name: Set up Node 22
