@@ -9,14 +9,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  probe:
+  fix-lockfile:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout exact branch
         uses: actions/checkout@v4
+        with:
+          ref: integration/mastering-v2-secure-p1-20260816
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
@@ -24,19 +26,17 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Generate lockfile-only audit fix
+      - name: Generate and verify exact lockfile-only audit fix
         run: |
           npm audit fix --package-lock-only
-          git diff -- package-lock.json > mastering-lockfile.patch
-          test -s mastering-lockfile.patch
+          git diff -- package-lock.json
+          test -n "$(git status --short package-lock.json)"
+          npm audit --package-lock-only
 
-      - name: Verify fixed lockfile audit
-        run: npm audit --package-lock-only
-
-      - name: Upload exact lockfile patch
-        uses: actions/upload-artifact@v4
-        with:
-          name: mastering-lockfile-patch
-          path: mastering-lockfile.patch
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit exact generated lockfile
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          git commit -m 'fix(deps): apply npm audit lockfile fix'
+          git push origin HEAD:integration/mastering-v2-secure-p1-20260816
