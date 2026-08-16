@@ -44,7 +44,7 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [void][System.Automation.Language.Parser]::ParseFile(
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
             (Join-Path $PWD 'scripts/Start-MasteringV2LocalIntegration.ps1'),
             [ref]$tokens,
             [ref]$errors
