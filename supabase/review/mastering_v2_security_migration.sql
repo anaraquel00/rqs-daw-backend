@@ -75,10 +75,11 @@ begin
     raise exception 'AUTHENTICATED_COMPLETED_MASTERS_UPDATE_BASELINE_MISSING';
   end if;
 
+  -- Effective anon privileges also include grants inherited through PUBLIC,
+  -- so these two checks cover both anon and accidental PUBLIC exposure without
+  -- treating PUBLIC as a normal login role in has_*_privilege().
   if has_table_privilege('anon', 'public.profiles', 'UPDATE')
-     or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE')
-     or has_table_privilege('PUBLIC', 'public.profiles', 'UPDATE')
-     or has_column_privilege('PUBLIC', 'public.profiles', 'completed_masters', 'UPDATE') then
+     or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
     raise exception 'PUBLIC_OR_ANON_PROFILE_UPDATE_UNEXPECTED';
   end if;
 
