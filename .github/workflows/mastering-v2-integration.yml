@@ -167,12 +167,16 @@ jobs:
           node --check src/controllers/payment.js
           node --check src/controllers/mastering-v2.js
           node --check tests/mastering_v2_auth_unit.mjs
+          node --check tests/mastering_v2_auth_http_e2e.mjs
           node --check tests/mastering_v2_security_sql_contract.mjs
           node --check tests/mastering_v2_http_e2e.mjs
           node --check tests/mastering_v2_security_e2e.mjs
 
       - name: Validate auth and ownership helpers
         run: node tests/mastering_v2_auth_unit.mjs
+
+      - name: Validate production-like auth middleware over HTTP
+        run: node tests/mastering_v2_auth_http_e2e.mjs
 
       - name: Validate security SQL contract
         run: node tests/mastering_v2_security_sql_contract.mjs
