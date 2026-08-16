@@ -30,6 +30,19 @@ begin
   ) then
     raise exception 'ACTIVE_RESERVATIONS_PRESENT';
   end if;
+
+  -- Rollback restores exactly the expected pre-migration browser quota ACL.
+  -- Refuse to continue if client UPDATE authority has already reappeared or
+  -- anonymous access is present, because that would mean the live ACL drifted.
+  if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+     or has_column_privilege('authenticated', 'public.profiles', 'completed_masters', 'UPDATE') then
+    raise exception 'AUTHENTICATED_QUOTA_UPDATE_ALREADY_PRESENT';
+  end if;
+
+  if has_table_privilege('anon', 'public.profiles', 'UPDATE')
+     or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
+    raise exception 'ANON_PROFILE_UPDATE_UNEXPECTED';
+  end if;
 end;
 $preflight$;
 
@@ -50,5 +63,12 @@ drop function public.confirm_mastering_quota(uuid, uuid);
 drop function public.release_mastering_quota(uuid, uuid);
 
 drop table public.mastering_quota_reservations;
+
+-- Restore the exact temporary Final Beta client behavior that the migration
+-- retired: authenticated may update only completed_masters. No table-level
+-- UPDATE and no anon UPDATE are restored.
+grant update (completed_masters)
+on table public.profiles
+to authenticated;
 
 commit;
