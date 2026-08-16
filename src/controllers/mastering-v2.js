@@ -400,6 +400,7 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
   let quotaReservationId = null;
   let quotaReservationUserId = null;
   let uploadedMasterS3Key = null;
+  let quotaReserved = false;
   let quotaConfirmed = false;
 
   try {
@@ -410,6 +411,7 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
       quotaReservationId = crypto.randomUUID();
       quotaReservationUserId = user.id;
       await reserveMasteringQuota(user.id, quotaReservationId);
+      quotaReserved = true;
     }
 
     const resolved = await resolveInput(req, user);
@@ -499,7 +501,7 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
       await safeDeleteS3(uploadedMasterS3Key);
     }
 
-    if (quotaReservationId && quotaReservationUserId && !quotaConfirmed) {
+    if (quotaReserved && quotaReservationId && quotaReservationUserId && !quotaConfirmed) {
       try {
         await releaseMasteringQuota(quotaReservationUserId, quotaReservationId);
       } catch (releaseError) {
