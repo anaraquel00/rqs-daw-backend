@@ -238,6 +238,19 @@ begin
     raise exception 'MASTERING_CONFIRM_ARGUMENT_MISSING';
   end if;
 
+  -- Keep the same lock order as reserve_mastering_quota: profile first,
+  -- reservation second. This avoids a profile/reservation lock-order cycle
+  -- when a stale reservation is being cleaned up while another session
+  -- attempts to confirm it.
+  perform 1
+  from public.profiles as p
+  where p.id = p_user_id
+  for update;
+
+  if not found then
+    raise exception 'PROFILE_NOT_FOUND';
+  end if;
+
   select
     r.status,
     r.counts_quota
