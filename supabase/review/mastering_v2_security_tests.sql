@@ -6,6 +6,21 @@
 
 begin;
 
+-- The migration must remove the temporary client-side quota write authority.
+do $client_quota_acl$
+begin
+  if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+     or has_column_privilege('authenticated', 'public.profiles', 'completed_masters', 'UPDATE') then
+    raise exception 'AUTHENTICATED_COMPLETED_MASTERS_UPDATE_NOT_RETIRED';
+  end if;
+
+  if has_table_privilege('anon', 'public.profiles', 'UPDATE')
+     or has_column_privilege('anon', 'public.profiles', 'completed_masters', 'UPDATE') then
+    raise exception 'ANON_COMPLETED_MASTERS_UPDATE_NOT_RETIRED';
+  end if;
+end;
+$client_quota_acl$;
+
 -- Synthetic profiles used only for staging validation.
 -- Existing rows with these reserved UUIDs are a hard stop.
 do $preflight$
