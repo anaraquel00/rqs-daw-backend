@@ -21,6 +21,11 @@ where schemaname = 'public'
   and tablename = 'mastering_quota_reservations';
 
 select
+  has_table_privilege('service_role', 'public.profiles', 'SELECT')
+    and has_table_privilege('service_role', 'public.profiles', 'UPDATE')
+    as service_role_profiles_access_present;
+
+select
   not has_table_privilege('anon', 'public.mastering_quota_reservations', 'SELECT')
     and not has_table_privilege('anon', 'public.mastering_quota_reservations', 'INSERT')
     and not has_table_privilege('anon', 'public.mastering_quota_reservations', 'UPDATE')
