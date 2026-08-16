@@ -1,0 +1,40 @@
+name: Mastering V2 Staging Runtime Isolation
+
+on:
+  push:
+    branches:
+      - integration/mastering-v2-secure-p1-20260816
+      - phase-a/staging-code-20260816
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging-runtime-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Check staging runtime hardening syntax
+        run: |
+          node --check server.js
+          node --check src/controllers/payment.js
+          node --check src/lib/runtime-config.js
+          node --check tests/staging_runtime_isolation.mjs
+
+      - name: Validate payment-disabled boot and exact CORS
+        run: node tests/staging_runtime_isolation.mjs
