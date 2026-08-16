@@ -44,7 +44,7 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
+          [void][System.Automation.Language.Parser]::ParseFile(
             (Join-Path $PWD 'scripts/Start-MasteringV2LocalIntegration.ps1'),
             [ref]$tokens,
             [ref]$errors
@@ -96,6 +96,8 @@ jobs:
               'mastering_v2_security_audit.sql',
               'mastering_v2_security_tests.sql',
               'mastering_v2_security_rollback.sql',
+              'mastering_v2_auth_profile_hardening.sql',
+              'mastering_v2_auth_profile_hardening_rollback.sql',
           )
           for name in files:
               parse_sql((root / name).read_text(encoding='utf-8'))
@@ -236,7 +238,7 @@ jobs:
           dropdb mastering_staging_ci
 
       - name: Set up Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
