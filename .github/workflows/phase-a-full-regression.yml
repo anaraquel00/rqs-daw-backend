@@ -1,0 +1,207 @@
+name: Phase A Full Backend Regression
+
+on:
+  push:
+    branches:
+      - phase-a/staging-code-20260816
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout exact Phase A head
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Python validation dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pip-audit pglast==8.4
+
+      - name: Gate Python dependency vulnerabilities
+        run: python -m pip_audit --progress-spinner off
+
+      - name: Run Python regression suite
+        run: python -m pytest -q
+
+      - name: Validate Mastering V2 capabilities
+        run: python -m src.controllers.mastering_v2_cli capabilities
+
+      - name: Parse Mastering V2 SQL review package
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from pglast import parse_sql
+          root = Path('supabase/review')
+          files = (
+              'ci/mastering_v2_security_fixture.sql',
+              'ci/mastering_v2_staging_fixture.sql',
+              'mastering_v2_staging_baseline.sql',
+              'mastering_v2_staging_baseline_rollback.sql',
+              'mastering_v2_security_migration.sql',
+              'mastering_v2_security_audit.sql',
+              'mastering_v2_security_tests.sql',
+              'mastering_v2_security_rollback.sql',
+              'mastering_v2_auth_profile_hardening.sql',
+              'mastering_v2_auth_profile_hardening_rollback.sql',
+          )
+          for name in files:
+              parse_sql((root / name).read_text(encoding='utf-8'))
+              print(f'SQL PARSE PASS: {name}')
+          PY
+
+      - name: Validate production-like Mastering migration and rollback
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_security_fixture.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_migration.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_tests.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_audit.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_rollback.sql
+
+      - name: Validate isolated staging migration and rollback
+        run: |
+          createdb mastering_staging_ci
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_staging_fixture.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_baseline.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_migration.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_tests.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_audit.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_security_rollback.sql
+          PGDATABASE=mastering_staging_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_baseline_rollback.sql
+          dropdb mastering_staging_ci
+
+      - name: Validate Auth profile hardening SQL
+        run: |
+          createdb mastering_auth_ci
+          PGDATABASE=mastering_auth_ci psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_auth_profile_fixture.sql
+          PGDATABASE=mastering_auth_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_hardening.sql
+          PGDATABASE=mastering_auth_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_audit.sql
+          PGDATABASE=mastering_auth_ci psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_hardening_rollback.sql
+          dropdb mastering_auth_ci
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install exact Node dependencies
+        run: npm ci
+
+      - name: Gate complete Node dependency audit
+        run: npm audit
+
+      - name: Check Node syntax including Phase A runtime
+        run: |
+          node --check server.js
+          node --check scripts/mastering-v2-local-server.js
+          node --check src/lib/supabase-server.js
+          node --check src/lib/mastering-v2-storage.js
+          node --check src/lib/runtime-config.js
+          node --check src/controllers/payment.js
+          node --check src/controllers/mastering-v2.js
+          node --check tests/mastering_v2_auth_unit.mjs
+          node --check tests/mastering_v2_auth_http_e2e.mjs
+          node --check tests/mastering_v2_security_sql_contract.mjs
+          node --check tests/mastering_v2_http_e2e.mjs
+          node --check tests/mastering_v2_security_e2e.mjs
+          node --check tests/mastering_v2_storage_config.mjs
+          node --check tests/staging_runtime_isolation.mjs
+
+      - name: Validate Mastering auth and HTTP contracts
+        run: |
+          node tests/mastering_v2_auth_unit.mjs
+          node tests/mastering_v2_auth_http_e2e.mjs
+          node tests/mastering_v2_security_sql_contract.mjs
+          node tests/mastering_v2_http_e2e.mjs
+          node tests/mastering_v2_security_e2e.mjs
+          node tests/mastering_v2_storage_config.mjs
+          node tests/staging_runtime_isolation.mjs
+
+      - name: Verify legacy Full Master bypass stays retired
+        run: |
+          grep -F "app.post('/mastering/process'" server.js
+          grep -F "LEGACY_MASTERING_PROCESS_RETIRED" server.js
+
+      - name: Parse staging PowerShell validators
+        shell: pwsh
+        run: |
+          $paths = @(
+            'scripts/Start-MasteringV2LocalIntegration.ps1',
+            'scripts/Test-MasteringV2StagingAuth.ps1',
+            'scripts/Test-MasteringV2StagingHttpAuth.ps1',
+            'scripts/Test-MasteringV2StagingQuotaHttp.ps1',
+            'scripts/Test-MasteringV2StagingQuotaHttpSbSecret.ps1'
+          )
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              exit 1
+            }
+          }
+          Write-Host 'PHASE_A_POWERSHELL_VALIDATORS: PASS'
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.5
+
+      - name: Validate Uplink router regression
+        working-directory: supabase/review/rqs-router
+        run: |
+          deno task check
+          deno task test
+          deno fmt --check index.ts index.rollback-safe.ts tracking.ts tracking_test.ts index_test.ts
+
+      - name: Validate Uplink SQL regression
+        run: |
+          createdb uplink_phase_a_ci
+          PGDATABASE=uplink_phase_a_ci psql -v ON_ERROR_STOP=1 -f supabase/review/ci/uplink_tracking_fixture.sql
+          PGDATABASE=uplink_phase_a_ci psql -v ON_ERROR_STOP=1 -f supabase/review/uplink_tracking_migration.sql
+          PGDATABASE=uplink_phase_a_ci psql -v ON_ERROR_STOP=1 -f supabase/review/uplink_tracking_tests.sql
+          dropdb uplink_phase_a_ci
+
+      - name: Phase A regression verdict
+        run: |
+          echo 'PHASE_A_BACKEND_FULL_REGRESSION: PASS'
+          echo 'PRODUCTION_MUTATION: NONE'
