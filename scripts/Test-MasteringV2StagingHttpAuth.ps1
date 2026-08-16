@@ -167,14 +167,20 @@ try {
             $stderr = if (Test-Path $ServerStderr) { Get-Content -LiteralPath $ServerStderr -Raw } else { '' }
             throw "Candidate server exited early. STDERR: $stderr"
         }
-        $health = Invoke-RqsJson -Method GET -Uri "$BaseUrl/health"
-        if ($health.StatusCode -eq 200) {
-            $HealthReady = $true
-            break
+        try {
+            $health = Invoke-RqsJson -Method GET -Uri "$BaseUrl/health"
+            if ($health.StatusCode -eq 200) {
+                $HealthReady = $true
+                break
+            }
+        }
+        catch {
+            # Expected during the short startup race; retry until timeout.
         }
     }
     if (-not $HealthReady) {
-        throw 'Candidate server did not become healthy within the timeout.'
+        $stderr = if (Test-Path $ServerStderr) { Get-Content -LiteralPath $ServerStderr -Raw } else { '' }
+        throw "Candidate server did not become healthy within the timeout. STDERR: $stderr"
     }
     Write-Host 'STAGING_HTTP_CANDIDATE_HEALTH: PASS'
 
