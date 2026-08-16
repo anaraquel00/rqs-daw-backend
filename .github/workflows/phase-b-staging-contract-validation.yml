@@ -39,6 +39,8 @@ jobs:
           script='scripts/Test-MasteringV2RemoteStagingE2E.ps1'
           contract='docs/MASTERING_V2_STAGING_E2E_CONTRACT.md'
           runbook='docs/PRODUCTION_SMOKE_ROLLBACK_RUNBOOK.md'
+          rotation='docs/CREDENTIAL_ROTATION_GATE.md'
+          payment='docs/P1_PAYMENT_MODE_DECISION_GATE.md'
 
           grep -F -q 'AllowStagingObjectMutation' "$script"
           grep -F -q 'AllowStagingCleanup' "$script"
@@ -53,6 +55,10 @@ jobs:
           grep -F -q 'STAGING_PRODUCTION_BUCKET_ACCESS: NONE' "$contract"
           grep -F -q 'COORDINATED ROLLBACK' "$runbook"
           grep -F -q 'AUTO-MERGE: FORBIDDEN' "$runbook"
+          grep -F -q 'CREDENTIAL_ROTATION_GATE: PASS' "$rotation"
+          grep -F -q 'Previously exposed values must never be restored' "$rotation"
+          grep -F -q 'SAFE DEFAULT RECOMMENDATION: WAITLIST_ONLY' "$payment"
+          grep -F -q 'LIVE_PAYMENT: HOLD' "$payment"
 
           echo 'PHASE_B_FAIL_CLOSED_BOUNDARIES: PASS'
 
@@ -90,6 +96,8 @@ jobs:
             scripts/Test-MasteringV2RemoteStagingE2E.ps1
             docs/MASTERING_V2_STAGING_E2E_CONTRACT.md
             docs/PRODUCTION_SMOKE_ROLLBACK_RUNBOOK.md
+            docs/CREDENTIAL_ROTATION_GATE.md
+            docs/P1_PAYMENT_MODE_DECISION_GATE.md
           )
           if grep -E -n 'sk_live_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|sb_secret_[A-Za-z0-9_-]{10,}|AWS_SECRET_ACCESS_KEY[[:space:]]*=[[:space:]]*[^<[:space:]][^[:space:]]*' "${files[@]}"; then
             echo 'ERROR: credential-like value found in Phase B artifacts.'
@@ -101,5 +109,7 @@ jobs:
         run: |
           echo 'PHASE_B_STAGING_E2E_CONTRACT: PASS'
           echo 'PHASE_B_PRODUCTION_SMOKE_ROLLBACK_RUNBOOK: PASS'
+          echo 'PHASE_B_CREDENTIAL_ROTATION_GATE: PASS'
+          echo 'PHASE_B_PAYMENT_DECISION_GATE: PASS'
           echo 'CLOUD_MUTATION: NONE'
           echo 'PRODUCTION_MUTATION: NONE'
