@@ -1,0 +1,71 @@
+name: Mastering V2 Staging Runtime Isolation
+
+on:
+  push:
+    branches:
+      - stage/mastering-v2-runtime-hardening-20260816
+  pull_request:
+    branches:
+      - integration/mastering-v2-secure-p1-20260816
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging-runtime-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Check staging runtime hardening syntax
+        run: |
+          node --check server.js
+          node --check src/controllers/payment.js
+          node --check src/lib/runtime-config.js
+          node --check tests/staging_runtime_isolation.mjs
+
+      - name: Validate runtime config fail-closed rules
+        run: |
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const cfg = require('./src/lib/runtime-config');
+
+          delete process.env.RQS_ALLOWED_ORIGINS;
+          assert.deepEqual(cfg.getAllowedOrigins(), [
+            'http://localhost:4200',
+            'https://rqs-daw-frontend.vercel.app',
+            'https://studio.raquelsynths.com',
+          ]);
+
+          process.env.RQS_ALLOWED_ORIGINS = 'https://preview.example.test,https://preview2.example.test/';
+          assert.deepEqual(cfg.getAllowedOrigins(), [
+            'https://preview.example.test',
+            'https://preview2.example.test',
+          ]);
+
+          process.env.RQS_ALLOWED_ORIGINS = '*';
+          assert.throws(() => cfg.getAllowedOrigins(), /wildcard/);
+
+          delete process.env.RQS_PAYMENT_MODE;
+          assert.equal(cfg.getPaymentMode(), 'enabled');
+          process.env.RQS_PAYMENT_MODE = 'disabled';
+          assert.equal(cfg.getPaymentMode(), 'disabled');
+          process.env.RQS_PAYMENT_MODE = 'invalid';
+          assert.throws(() => cfg.getPaymentMode(), /enabled.*disabled/);
+
+          console.log('STAGING_RUNTIME_CONFIG: PASS');
+          NODE
+
+      - name: Validate payment-disabled boot and exact CORS
+        run: node tests/staging_runtime_isolation.mjs
