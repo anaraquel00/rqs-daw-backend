@@ -35,10 +35,12 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const env = {
   ...process.env,
   PORT: String(port),
-  RQS_PAYMENT_MODE: 'disabled',
   RQS_ALLOWED_ORIGINS: allowedOrigin,
 };
 
+// Project 1 Final Beta must fail closed to WAITLIST_ONLY even when the
+// deployment omits RQS_PAYMENT_MODE entirely.
+delete env.RQS_PAYMENT_MODE;
 delete env.STRIPE_SECRET_KEY;
 delete env.STRIPE_WEBHOOK_SECRET;
 delete env.SUPABASE_SECRET_KEY;
@@ -81,9 +83,9 @@ try {
   assert.equal(payload.code, 'PAYMENT_DISABLED');
 
   assert.equal(child.exitCode, null);
-  console.log('STAGING_RUNTIME_PAYMENT_DISABLED_BOOT: PASS');
+  console.log('FINAL_BETA_PAYMENT_DEFAULT_DISABLED: PASS');
   console.log('STAGING_RUNTIME_EXACT_CORS: PASS');
-  console.log('STAGING_RUNTIME_PROD_STRIPE_SECRET_REQUIRED: NO');
+  console.log('FINAL_BETA_PROD_STRIPE_SECRET_REQUIRED: NO');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolve => {
