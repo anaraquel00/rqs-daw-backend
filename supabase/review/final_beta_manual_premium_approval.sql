@@ -12,15 +12,16 @@
 --   - The immutable Supabase auth.users.id UUID is the authority.
 --   - Expected email is used only as a human/operator cross-check.
 --   - The UPDATE targets public.profiles.id only.
---   - This must be executed only from a trusted Supabase SQL/admin session.
+--   - Execute only from a trusted Supabase SQL/admin session.
 --   - Never expose this as a browser/public RPC.
 --
--- BEFORE EXECUTION
---   1. User must have logged in at least once so auth.users/profile exist.
---   2. Obtain the exact auth.users.id UUID READ-ONLY.
---   3. Confirm the exact expected login email with the account owner.
---   4. Replace BOTH placeholders below.
---   5. Run on the intended Supabase project only.
+-- OPERATOR WORKFLOW
+--   1. User logs in at least once so auth.users/profile exist.
+--   2. Obtain auth.users.id READ-ONLY.
+--   3. Confirm expected login email with the account owner.
+--   4. Replace the UUID and email once in premium_approval_input below.
+--   5. First run MUST keep the final ROLLBACK. Verify exactly one row.
+--   6. Only after successful review change final ROLLBACK to COMMIT and rerun.
 --
 -- FAIL-CLOSED DEFAULTS
 --   The all-zero UUID + .invalid email intentionally match no real user.
@@ -28,16 +29,31 @@
 
 begin;
 
+create temporary table premium_approval_input (
+  user_id uuid primary key,
+  expected_email text not null
+) on commit drop;
+
+insert into premium_approval_input (user_id, expected_email)
+values (
+  '00000000-0000-0000-0000-000000000000', -- REPLACE ONCE
+  'CHANGE_ME@example.invalid'                -- REPLACE ONCE
+);
+
 do $approval$
 declare
-  v_user_id uuid := '00000000-0000-0000-0000-000000000000'; -- REPLACE
-  v_expected_email text := 'CHANGE_ME@example.invalid';       -- REPLACE
+  v_user_id uuid;
+  v_expected_email text;
   v_actual_email text;
   v_profile_role text;
   v_updated integer;
 begin
+  select user_id, expected_email
+    into v_user_id, v_expected_email
+  from premium_approval_input;
+
   if v_user_id = '00000000-0000-0000-0000-000000000000'::uuid
-     or lower(v_expected_email) = 'change_me@example.invalid' then
+     or lower(trim(v_expected_email)) = 'change_me@example.invalid' then
     raise exception 'PREMIUM_APPROVAL_PLACEHOLDERS_NOT_REPLACED';
   end if;
 
@@ -82,16 +98,15 @@ begin
 end;
 $approval$;
 
--- Operator verification. This deliberately does not print the email.
-select id, role, completed_masters
-from public.profiles
-where id = '00000000-0000-0000-0000-000000000000'::uuid; -- REPLACE with the same UUID
+-- Verification deliberately does not expose the email.
+select p.id, p.role, p.completed_masters
+from public.profiles as p
+join premium_approval_input as i on i.user_id = p.id;
 
--- IMPORTANT:
--- Review the returned single row before COMMIT.
--- If anything is unexpected, execute ROLLBACK instead.
-
--- COMMIT IS INTENTIONALLY NOT INCLUDED.
--- Choose exactly one after reviewing evidence:
---   commit;
---   rollback;
+-- =========================================================
+-- SAFE DEFAULT: DRY RUN ONLY
+-- Keep ROLLBACK for the first reviewed execution.
+-- After a PASS and human verification of exactly one intended UUID,
+-- change ONLY this final word to COMMIT and rerun the identical script.
+-- =========================================================
+rollback;
