@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - integration/mastering-v2-secure-p1-20260816
+      - main
   workflow_dispatch:
 
 permissions:
@@ -57,13 +58,17 @@ jobs:
           process.env.RQS_ALLOWED_ORIGINS = '*';
           assert.throws(() => cfg.getAllowedOrigins(), /wildcard/);
 
+          // Final Beta / Project 1 must fail closed to WAITLIST_ONLY.
           delete process.env.RQS_PAYMENT_MODE;
-          assert.equal(cfg.getPaymentMode(), 'enabled');
+          assert.equal(cfg.getPaymentMode(), 'disabled');
           process.env.RQS_PAYMENT_MODE = 'disabled';
           assert.equal(cfg.getPaymentMode(), 'disabled');
+          process.env.RQS_PAYMENT_MODE = 'enabled';
+          assert.equal(cfg.getPaymentMode(), 'enabled');
           process.env.RQS_PAYMENT_MODE = 'invalid';
           assert.throws(() => cfg.getPaymentMode(), /enabled.*disabled/);
 
+          console.log('FINAL_BETA_PAYMENT_DEFAULT_DISABLED: PASS');
           console.log('STAGING_RUNTIME_CONFIG: PASS');
           NODE
 
