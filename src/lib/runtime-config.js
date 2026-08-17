@@ -52,7 +52,9 @@ function getAllowedOrigins() {
 }
 
 function getPaymentMode() {
-  const value = String(process.env.RQS_PAYMENT_MODE || 'enabled').trim().toLowerCase();
+  // Project 1 Final Beta is WAITLIST_ONLY by default. Live payment must be
+  // explicitly enabled after the separate payment-hardening/release gate.
+  const value = String(process.env.RQS_PAYMENT_MODE || 'disabled').trim().toLowerCase();
   if (!['enabled', 'disabled'].includes(value)) {
     throw new Error('RQS_PAYMENT_MODE must be "enabled" or "disabled".');
   }
