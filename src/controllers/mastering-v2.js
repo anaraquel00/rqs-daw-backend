@@ -319,17 +319,72 @@ function extractCliError(result) {
   }
 }
 
+async function getCapabilitiesPayload() {
+  if (capabilitiesCache) return capabilitiesCache;
+
+  const result = await runPython(['capabilities']);
+  if (result.code !== 0) {
+    throw new Error(`Failed to load Mastering V2 capabilities: ${result.stderr}`);
+  }
+
+  const jsonLine = result.stdout.split(/\r?\n/).filter(Boolean).pop();
+  capabilitiesCache = JSON.parse(jsonLine);
+  return capabilitiesCache;
+}
+
+async function resolveEffectiveTargetLufs(body) {
+  const requestedLufs = parseOptionalNumber(body.requested_lufs, 'requested_lufs');
+  if (requestedLufs !== null) return requestedLufs;
+
+  const capabilities = await getCapabilitiesPayload();
+  const destination = String(body.destination || '').toLowerCase();
+
+  let target;
+  if (destination === 'streaming') {
+    const platform = String(body.platform || '').toLowerCase();
+    const mode = String(body.soundcloud_mode || 'standard').toLowerCase();
+    target = capabilities.destinations?.streaming?.platforms?.[platform]?.[mode];
+  } else {
+    target = capabilities.destinations?.[destination]?.target;
+  }
+
+  const effectiveTargetLufs = Number(target?.target_lufs);
+  if (!Number.isFinite(effectiveTargetLufs)) {
+    const error = new Error('Mastering V2 effective LUFS target could not be resolved.');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return effectiveTargetLufs;
+}
+
+function fileToken(value, fallback) {
+  return sanitizeBaseName(String(value || fallback))
+    .replace(/[\s,]+/g, '_')
+    .toUpperCase();
+}
+
+function deliveryFileToken(body) {
+  const destination = fileToken(body.destination, 'MASTER');
+  if (destination !== 'STREAMING') return destination;
+
+  const platform = fileToken(body.platform, 'GENERIC');
+  const soundcloudMode = String(body.soundcloud_mode || 'standard').toLowerCase();
+  const modeSuffix = platform === 'SOUNDCLOUD' && soundcloudMode === 'loud'
+    ? '_LOUD'
+    : '';
+
+  return `${destination}_${platform}${modeSuffix}`;
+}
+
+function formatLufsFileToken(value) {
+  const rounded = Math.round(Number(value) * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}LUFS`;
+}
+
 router.get('/capabilities', async (req, res) => {
   try {
-    if (capabilitiesCache) return res.status(200).json(capabilitiesCache);
-    const result = await runPython(['capabilities']);
-    if (result.code !== 0) {
-      console.error('[MASTERING V2] capabilities CLI error:', result.stderr);
-      return res.status(500).json({ error: 'Failed to load Mastering V2 contract.' });
-    }
-    const jsonLine = result.stdout.split(/\r?\n/).filter(Boolean).pop();
-    capabilitiesCache = JSON.parse(jsonLine);
-    return res.status(200).json(capabilitiesCache);
+    return res.status(200).json(await getCapabilitiesPayload());
   } catch (error) {
     console.error('[MASTERING V2] capabilities error:', error);
     return res.status(500).json({ error: 'Failed to load Mastering V2 contract.' });
@@ -441,9 +496,12 @@ router.post('/process', requireMasteringUser, upload.single('audio'), async (req
       return res.download(outputPath, 'rqs_v2_preview.wav', () => safeUnlink(outputPath));
     }
 
-    const atmosphere = String(req.body.atmosphere || 'clear_sky').toUpperCase();
+    const atmosphere = fileToken(req.body.atmosphere, 'clear_sky');
+    const delivery = deliveryFileToken(req.body);
+    const effectiveTargetLufs = await resolveEffectiveTargetLufs(req.body);
+    const lufsToken = formatLufsFileToken(effectiveTargetLufs);
     const originalName = sanitizeBaseName(originalNameFromRequest(resolved.s3Key, resolved.uploadedFile));
-    const cleanMasterName = `RQS_MASTER_V2_${atmosphere}_${originalName}`;
+    const cleanMasterName = `RQS_MASTER_V2_${atmosphere}_${delivery}_${lufsToken}_${originalName}`;
 
     if (LOCAL_OUTPUT_MODE) {
       keepOutputForDownload = true;
