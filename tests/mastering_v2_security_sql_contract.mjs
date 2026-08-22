@@ -3,7 +3,7 @@ import fs from 'node:fs';
 const sql = fs.readFileSync(
   'supabase/review/mastering_v2_security_migration.sql',
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 function assertIncludes(value, message) {
   if (!sql.includes(value)) throw new Error(message);

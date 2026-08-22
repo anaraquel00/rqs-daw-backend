@@ -296,10 +296,20 @@ async function main() {
     assert(finalPayload.success === true, 'Final response success flag missing.');
     assert(finalPayload.engine === 'mastering-v2-v1', 'Final response engine mismatch.');
     assert(finalPayload.outputMode === 'local', 'Local output mode was not used in E2E.');
+    const expectedFileName = 'RQS_MASTER_V2_CLEAR_SKY_STREAMING_SPOTIFY_-14LUFS_mastering_v2_http_e2e.wav';
+    assert(
+      finalPayload.fileName === expectedFileName,
+      `Final filename metadata mismatch. expected=${expectedFileName} actual=${finalPayload.fileName}`,
+    );
     assert(typeof finalPayload.downloadUrl === 'string' && finalPayload.downloadUrl.startsWith(BASE_URL), 'Local download URL mismatch.');
 
     const downloadResponse = await fetch(finalPayload.downloadUrl);
     await requireOk(downloadResponse, 'Final download');
+    const disposition = downloadResponse.headers.get('content-disposition') || '';
+    assert(
+      disposition.includes(expectedFileName),
+      `Final Content-Disposition filename mismatch: ${disposition}`,
+    );
     const httpFinal = Buffer.from(await downloadResponse.arrayBuffer());
     parseWav(httpFinal, 'Final');
     assertWavEquivalent(httpFinal, directFinal, 'Final');
