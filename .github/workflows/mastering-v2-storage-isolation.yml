@@ -1,0 +1,45 @@
+name: Mastering V2 Storage Isolation
+
+on:
+  push:
+    branches:
+      - integration/mastering-v2-secure-p1-20260816
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-storage-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check storage configuration syntax
+        run: |
+          node --check src/lib/mastering-v2-storage.js
+          node --check tests/mastering_v2_storage_config.mjs
+          node --check src/controllers/mastering-v2.js
+
+      - name: Validate fail-closed storage environment contract
+        run: node tests/mastering_v2_storage_config.mjs
+
+      - name: Verify Mastering V2 controller has no implicit production bucket
+        run: |
+          grep -F -q "getMasteringStorageConfig" src/controllers/mastering-v2.js
+          if grep -F -q "amzn-rqs-bunker-sa" src/controllers/mastering-v2.js; then
+            echo 'ERROR: production bucket literal remains in Mastering V2 controller.'
+            exit 1
+          fi
+          grep -F -q "RQS_MASTERING_V2_STORAGE_ENV" src/lib/mastering-v2-storage.js
+          grep -F -q "RQS_MASTERING_V2_BUCKET_NAME" src/lib/mastering-v2-storage.js
+          echo 'MASTERING_V2_CONTROLLER_STORAGE_ISOLATION: PASS'

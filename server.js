@@ -1,30 +1,37 @@
 const express = require('express');
 const cors = require('cors');
+const { getAllowedOrigins } = require('./src/lib/runtime-config');
 const app = express();
 
-// 🟢 PROTEÇÃO SRE (Barra Dupla): Corrige requisições com //mastering/ de forma automática [1]
+app.disable('x-powered-by');
+
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+});
+
+// Normalize accidental duplicate path separators before route matching.
 app.use((req, res, next) => {
     req.url = req.url.replace(/\/\/+/g, '/');
     next();
 });
 
 const corsOptions = {
-    origin: [
-        'http://localhost:4200', 
-        'https://rqs-daw-frontend.vercel.app', 
-        'https://studio.raquelsynths.com'
-    ],
+    origin: getAllowedOrigins(),
     allowedHeaders: ['Content-Type', 'Authorization']
 };
 
 app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions)); // Express 5 RegExp
+app.options(/.*/, cors(corsOptions));
 
-// 🟢 AJUSTE DE PARSER SRE: Salva o buffer binário original em req.rawBody para a validação do Stripe! [1]
-app.use(express.json({ 
+// Keep the raw request body for Stripe webhook verification.
+app.use(express.json({
     limit: '50mb',
     verify: (req, res, buf) => {
-        req.rawBody = buf; 
+        req.rawBody = buf;
     }
 }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -37,23 +44,32 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Importando os Motores Modulares
 const masteringRouter = require('./src/controllers/mastering');
+const masteringV2Router = require('./src/controllers/mastering-v2');
 const mixRouter = require('./src/controllers/mix-generator');
 const videoRouter = require('./src/controllers/video-engine');
 const stemsRouter = require('./src/controllers/stem-splitter');
-const paymentRouter = require('./src/controllers/payment'); // 🟢 NOVO MÓDULO DE PAGAMENTOS
+const paymentRouter = require('./src/controllers/payment');
 
-// Endpoints sincronizados com a Vercel
+// The legacy Full Master endpoint has no Project-1 server-side auth/quota
+// contract. Keep the legacy upload helper for Setlist compatibility, but make
+// the old processing path fail closed so it cannot bypass Mastering V2 quota.
+app.post('/mastering/process', (req, res) => {
+    res.status(410).json({
+        error: 'Legacy mastering processing is retired. Use /mastering/v2/process.',
+        code: 'LEGACY_MASTERING_PROCESS_RETIRED'
+    });
+});
+
 app.use('/mastering', masteringRouter);
+app.use('/mastering/v2', masteringV2Router);
 app.use('/mix', mixRouter);
 app.use('/video', videoRouter);
 app.use('/stems', stemsRouter);
-app.use('/payment', paymentRouter); // 🟢 Rota ativa em https://(seu-lambda-url)/payment/stripe-webhook
+app.use('/payment', paymentRouter);
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`RQS DSP Core rodando na porta ${PORT}`);
-    console.log(`[RQS MAINFRAME] Módulos operacionais: [DSP] [MIXER] [VIDEO] [STEMS]`);
+    console.log('[RQS MAINFRAME] Módulos operacionais: [DSP] [DSP_V2] [MIXER] [VIDEO] [STEMS]');
 });
-

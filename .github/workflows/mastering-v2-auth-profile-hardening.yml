@@ -1,0 +1,170 @@
+name: Mastering V2 Auth Profile Hardening
+
+on:
+  push:
+    branches:
+      - integration/mastering-v2-secure-p1-20260816
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-baseline:
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: postgres
+      PGUSER: postgres
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Model observed production baseline
+        run: psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_auth_profile_fixture.sql
+
+      - name: Apply and audit hardened production path
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_hardening.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_audit.sql
+
+      - name: Verify auth insert still creates a Free profile
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into auth.users(id,email)
+          values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid, 'ci-auth@example.invalid');
+
+          do $assert$
+          declare
+            v_count integer;
+          begin
+            select count(*) into v_count
+            from public.profiles
+            where id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid
+              and email='ci-auth@example.invalid'
+              and role='free'
+              and completed_masters=0;
+            if v_count <> 1 then
+              raise exception 'CI_AUTH_PROFILE_NOT_CREATED';
+            end if;
+          end;
+          $assert$;
+          SQL
+
+      - name: Validate emergency rollback syntax and observed baseline restoration
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_hardening_rollback.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $assert$
+          declare
+            v_config text[];
+          begin
+            select p.proconfig into v_config
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='handle_new_user'
+              and pg_get_function_identity_arguments(p.oid)='';
+
+            if v_config is not null then
+              raise exception 'CI_AUTH_ROLLBACK_SEARCH_PATH_NOT_RESTORED: %', v_config;
+            end if;
+
+            if not has_function_privilege('anon','public.handle_new_user()','EXECUTE')
+               or not has_function_privilege('authenticated','public.handle_new_user()','EXECUTE')
+               or not has_function_privilege('service_role','public.handle_new_user()','EXECUTE') then
+              raise exception 'CI_AUTH_ROLLBACK_EXECUTE_BASELINE_NOT_RESTORED';
+            end if;
+          end;
+          $assert$;
+          SQL
+
+  isolated-staging-baseline:
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: postgres
+      PGUSER: postgres
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Model observed isolated staging baseline
+        run: psql -v ON_ERROR_STOP=1 -f supabase/review/ci/mastering_v2_staging_auth_fixture.sql
+
+      - name: Apply and audit isolated staging Auth alignment
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_auth_alignment.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_auth_profile_audit.sql
+
+      - name: Verify staging signup creates a Free profile
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into auth.users(id,email)
+          values ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid, 'staging-auth@example.invalid');
+
+          do $assert$
+          declare
+            v_count integer;
+          begin
+            select count(*) into v_count
+            from public.profiles
+            where id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid
+              and email='staging-auth@example.invalid'
+              and role='free'
+              and completed_masters=0;
+            if v_count <> 1 then
+              raise exception 'CI_STAGING_AUTH_PROFILE_NOT_CREATED';
+            end if;
+          end;
+          $assert$;
+
+          delete from public.profiles where id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid;
+          delete from auth.users where id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1'::uuid;
+          SQL
+
+      - name: Validate staging alignment rollback
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/review/mastering_v2_staging_auth_alignment_rollback.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $assert$
+          begin
+            if to_regprocedure('public.handle_new_user()') is not null then
+              raise exception 'CI_STAGING_AUTH_ROLLBACK_FUNCTION_REMAINS';
+            end if;
+            if exists (
+              select 1 from pg_trigger t
+              join pg_class c on c.oid=t.tgrelid
+              join pg_namespace n on n.oid=c.relnamespace
+              where not t.tgisinternal and n.nspname='auth' and c.relname='users'
+            ) then
+              raise exception 'CI_STAGING_AUTH_ROLLBACK_TRIGGER_REMAINS';
+            end if;
+          end;
+          $assert$;
+          SQL

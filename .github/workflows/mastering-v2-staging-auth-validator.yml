@@ -1,0 +1,55 @@
+name: Mastering V2 Staging Auth Validator
+
+on:
+  push:
+    branches:
+      - integration/mastering-v2-secure-p1-20260816
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-staging-auth-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell validator
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/Test-MasteringV2StagingAuth.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host 'STAGING_AUTH_VALIDATOR_SYNTAX: PASS'
+
+      - name: Verify staging-only and secret-safe contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='scripts/Test-MasteringV2StagingAuth.ps1'
+          grep -F -q 'uwrqbywapomuloresoek' "$FILE"
+          grep -F -q 'RQS_STAGING_SUPABASE_PUBLISHABLE_KEY' "$FILE"
+          grep -F -q "Read-Host 'Disposable STAGING test password' -AsSecureString" "$FILE"
+          grep -F -q 'SECRETS_PRINTED: NONE' "$FILE"
+          if grep -F -q 'ucearnthodrltkvkmhit' "$FILE"; then
+            echo 'ERROR: production Supabase ref leaked into staging Auth validator.'
+            exit 1
+          fi
+          if grep -F -q 'sb_secret_' "$FILE" && ! grep -F -q -- "-match 'service_role|sb_secret_'" "$FILE"; then
+            echo 'ERROR: unexpected secret-key marker.'
+            exit 1
+          fi
+          echo 'STAGING_AUTH_VALIDATOR_ISOLATION: PASS'
