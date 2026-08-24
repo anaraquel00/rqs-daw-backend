@@ -27,6 +27,10 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 
+const mixRouter = require('./src/controllers/mix-generator');
+// Setlist authentication and its bounded route parser are owned by the router.
+app.use('/mix', mixRouter);
+
 // Keep the raw request body for Stripe webhook verification.
 app.use(express.json({
     limit: '50mb',
@@ -46,7 +50,6 @@ app.get('/health', (req, res) => {
 
 const masteringRouter = require('./src/controllers/mastering');
 const masteringV2Router = require('./src/controllers/mastering-v2');
-const mixRouter = require('./src/controllers/mix-generator');
 const videoRouter = require('./src/controllers/video-engine');
 const stemsRouter = require('./src/controllers/stem-splitter');
 const paymentRouter = require('./src/controllers/payment');
@@ -63,7 +66,6 @@ app.post('/mastering/process', (req, res) => {
 
 app.use('/mastering', masteringRouter);
 app.use('/mastering/v2', masteringV2Router);
-app.use('/mix', mixRouter);
 app.use('/video', videoRouter);
 app.use('/stems', stemsRouter);
 app.use('/payment', paymentRouter);
