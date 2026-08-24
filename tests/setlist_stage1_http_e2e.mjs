@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +26,8 @@ const body = (overrides = {}) => ({
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rqs-setlist-http-test-'));
 const calls = [];
+const signCalls = [];
+let blockedRenderControl = null;
 let renderFailure = null;
 let uploadFailure = false;
 let lastRender = null;
@@ -61,6 +64,26 @@ async function renderSetlist(options) {
   if (renderFailure) throw renderFailure;
   renderCount += 1;
   lastRender = options;
+  if (blockedRenderControl) {
+    const control = blockedRenderControl;
+    control.signal = options.signal;
+    control.started.resolve();
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error('Timed out waiting for client-disconnect cancellation.')),
+        3000,
+      );
+      const onAbort = () => {
+        clearTimeout(timeout);
+        control.abortObserved = true;
+        control.aborted.resolve();
+        resolve();
+      };
+      if (options.signal.aborted) onAbort();
+      else options.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    throw new RqsHttpError(499, 'Setlist request was cancelled.', 'REQUEST_ABORTED');
+  }
   await fs.promises.writeFile(options.outputPath, Buffer.from('RIFF-test-output'));
   return {
     outputDuration: 38,
@@ -82,9 +105,12 @@ app.use('/mix', createSetlistRouter({
   readProfileRole,
   getStorageConfig: () => ({ region: 'sa-east-1', bucketName: 'test-bucket', localOutput: false }),
   makeS3Client: () => fakeClient,
-  signUrl: async (_client, command) => command.constructor.name === 'PutObjectCommand'
-    ? 'https://upload.example.test/signed'
-    : 'https://download.example.test/signed',
+  signUrl: async (_client, command) => {
+    signCalls.push({ name: command.constructor.name, input: command.input });
+    return command.constructor.name === 'PutObjectCommand'
+      ? 'https://upload.example.test/signed'
+      : 'https://download.example.test/signed';
+  },
   renderSetlist,
   tmpRoot: tempRoot,
 }));
@@ -105,6 +131,60 @@ async function request(method, pathname, requestBody, token = 'valid') {
   });
   const payload = await response.json();
   return { response, payload };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitFor(predicate, message, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+function startCancellableRequest(requestBody) {
+  const received = [];
+  let responseReceived = false;
+  const closed = deferred();
+  let closedSettled = false;
+  const settleClosed = () => {
+    if (closedSettled) return;
+    closedSettled = true;
+    closed.resolve();
+  };
+  const clientRequest = http.request({
+    hostname: '127.0.0.1',
+    port: server.address().port,
+    path: '/mix/generate-s3',
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer valid',
+      'Content-Type': 'application/json',
+    },
+  }, (response) => {
+    responseReceived = true;
+    response.on('data', (chunk) => received.push(chunk));
+    response.on('end', settleClosed);
+    response.on('close', settleClosed);
+  });
+  clientRequest.on('error', settleClosed);
+  clientRequest.on('close', settleClosed);
+  clientRequest.end(JSON.stringify(requestBody));
+  return {
+    destroy: () => clientRequest.destroy(),
+    closed: closed.promise,
+    received,
+    responseReceived: () => responseReceived,
+  };
 }
 
 try {
@@ -210,6 +290,9 @@ try {
   assert.match(calls.find((call) => call.name === 'PutObjectCommand').input.Key, /^outputs\/user-1\/setlists\/[0-9a-f-]+\.wav$/);
   assert.equal(Buffer.isBuffer(calls.find((call) => call.name === 'PutObjectCommand').input.Body), false);
   assert.deepEqual(fs.readdirSync(tempRoot), []);
+  const normalCompletionSignal = lastRender.signal;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(normalCompletionSignal.aborted, false);
 
   result = await request('POST', '/mix/generate-s3', body({
     tracks: [owned('track-01'), owned('track-02'), owned('track-03')],
@@ -245,6 +328,40 @@ try {
   assert.equal(JSON.stringify(result.payload).includes('PRIVATE_OUTPUT_UPLOAD_DETAIL'), false);
   assert.deepEqual(fs.readdirSync(tempRoot), []);
   uploadFailure = false;
+
+  calls.length = 0;
+  signCalls.length = 0;
+  const disconnectControl = {
+    started: deferred(),
+    aborted: deferred(),
+    signal: null,
+    abortObserved: false,
+  };
+  blockedRenderControl = disconnectControl;
+  const disconnectedClient = startCancellableRequest(body());
+  await disconnectControl.started.promise;
+  const disconnectedSignal = disconnectControl.signal;
+  disconnectedClient.destroy();
+  await Promise.race([
+    disconnectControl.aborted.promise,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('Client disconnect did not abort the renderer.')),
+      3000,
+    )),
+  ]);
+  await disconnectedClient.closed;
+  await waitFor(
+    () => fs.readdirSync(tempRoot).length === 0,
+    'Temporary request directory was not removed after client disconnect.',
+  );
+  blockedRenderControl = null;
+  assert.equal(disconnectControl.abortObserved, true);
+  assert.equal(disconnectedSignal.aborted, true);
+  assert.equal(calls.some((call) => call.name === 'PutObjectCommand'), false);
+  assert.equal(signCalls.some((call) => call.name === 'GetObjectCommand'), false);
+  assert.equal(disconnectedClient.responseReceived(), false);
+  assert.equal(Buffer.concat(disconnectedClient.received).length, 0);
+  assert.deepEqual(fs.readdirSync(tempRoot), []);
 
   result = await request('POST', '/mix/generate', undefined, null);
   assert.equal(result.response.status, 410);

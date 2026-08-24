@@ -153,8 +153,14 @@ function createSetlistRouter(overrides = {}) {
       }
     };
     const abortController = new AbortController();
-    const onAborted = () => abortController.abort();
-    req.once('aborted', onAborted);
+    const onRequestAborted = () => abortController.abort();
+    const onResponseClose = () => {
+      if (!res.writableEnded) {
+        abortController.abort();
+      }
+    };
+    req.once('aborted', onRequestAborted);
+    res.once('close', onResponseClose);
 
     try {
       const plan = setlistEngine.validateSetlistRequest(req.body);
@@ -270,9 +276,13 @@ function createSetlistRouter(overrides = {}) {
       });
     } catch (error) {
       await cleanupRequestDirectory();
-      if (!req.aborted) sendSetlistError(res, error, 'render');
+      if (!abortController.signal.aborted && !req.aborted && !res.destroyed && !res.writableEnded) {
+        sendSetlistError(res, error, 'render');
+      }
     } finally {
-      req.off('aborted', onAborted);
+      req.off('aborted', onRequestAborted);
+      res.off('close', onResponseClose);
+      await cleanupRequestDirectory();
     }
   });
 
