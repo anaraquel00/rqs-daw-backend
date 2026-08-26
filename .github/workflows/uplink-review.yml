@@ -77,10 +77,15 @@ jobs:
           root = Path("supabase/review")
           files = (
               "ci/uplink_tracking_fixture.sql",
+              "ci/uplink_dedup_retention_cron_fixture.sql",
               "uplink_tracking_audit.sql",
               "uplink_tracking_migration.sql",
               "uplink_tracking_rollback.sql",
               "uplink_tracking_tests.sql",
+              "uplink_dedup_retention_audit.sql",
+              "uplink_dedup_retention_migration.sql",
+              "uplink_dedup_retention_rollback.sql",
+              "uplink_dedup_retention_tests.sql",
           )
           for name in files:
               parse_sql((root / name).read_text(encoding="utf-8"))
@@ -95,6 +100,57 @@ jobs:
             -f supabase/review/uplink_tracking_migration.sql
           psql -v ON_ERROR_STOP=1 \
             -f supabase/review/uplink_tracking_tests.sql
+
+      - name: Execute fail-closed Uplink retention SQL matrix
+        run: |
+          if psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_migration.sql; then
+            echo "Expected missing-pg_cron preflight failure" >&2
+            exit 1
+          fi
+
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/ci/uplink_dedup_retention_cron_fixture.sql
+
+          psql -v ON_ERROR_STOP=1 \
+            -c "grant delete on public.rqs_uplink_click_dedup to authenticated"
+          if psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_migration.sql; then
+            echo "Expected broad-privilege preflight failure" >&2
+            exit 1
+          fi
+          psql -v ON_ERROR_STOP=1 \
+            -c "revoke delete on public.rqs_uplink_click_dedup from authenticated"
+
+          psql -v ON_ERROR_STOP=1 \
+            -c "create policy retention_negative_control on public.rqs_uplink_click_dedup for select to authenticated using (true)"
+          if psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_migration.sql; then
+            echo "Expected broad-policy preflight failure" >&2
+            exit 1
+          fi
+          psql -v ON_ERROR_STOP=1 \
+            -c "drop policy retention_negative_control on public.rqs_uplink_click_dedup"
+
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_migration.sql
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_tests.sql
+
+          if psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_migration.sql; then
+            echo "Expected duplicate-job preflight failure" >&2
+            exit 1
+          fi
+
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_rollback.sql
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_migration.sql
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_tests.sql
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_rollback.sql
 
       - name: Install Node dependencies
         run: npm ci --ignore-scripts
