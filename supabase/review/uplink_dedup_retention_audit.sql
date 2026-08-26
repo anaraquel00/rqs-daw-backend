@@ -13,30 +13,109 @@ from pg_extension
 where extname = 'pg_cron';
 
 select
-  jobid,
-  jobname,
-  schedule,
-  command,
-  database,
-  username,
-  active
-from cron.job
-where jobname = 'rqs-uplink-dedup-retention-daily';
+  case
+    when exists (
+      select 1
+      from pg_extension
+      where extname = 'pg_cron'
+    ) then 'PG_CRON = PRESENT'
+    else 'PG_CRON = ABSENT'
+  end as pg_cron_status,
+  case
+    when to_regclass('cron.job') is not null
+      then 'CRON_JOB = AVAILABLE'
+    else 'CRON_JOB = ABSENT'
+  end as cron_job_catalog_status,
+  case
+    when to_regclass('cron.job_run_details') is not null
+      then 'CRON_JOB_RUN_DETAILS = AVAILABLE'
+    else 'CRON_JOB_RUN_DETAILS = ABSENT'
+  end as cron_run_catalog_status;
 
-select
-  jobid,
-  status,
-  start_time,
-  end_time,
-  return_message
-from cron.job_run_details
-where jobid in (
-  select jobid
-  from cron.job
-  where jobname = 'rqs-uplink-dedup-retention-daily'
-)
-order by start_time desc
-limit 20;
+-- Dynamic catalog reads let this same audit run before pg_cron is enabled.
+-- They create no objects and never mutate scheduler state.
+do $audit_cron_job$
+declare
+  v_job record;
+  v_found boolean := false;
+begin
+  if to_regclass('cron.job') is null then
+    raise notice 'CRON_JOB_METADATA = UNAVAILABLE';
+  else
+    for v_job in execute $query$
+      select
+        jobid,
+        jobname,
+        schedule,
+        command,
+        database,
+        username,
+        active
+      from cron.job
+      where jobname = 'rqs-uplink-dedup-retention-daily'
+    $query$
+    loop
+      v_found := true;
+      raise notice
+        'CRON_JOB_METADATA jobid=% jobname=% schedule=% command=% database=% username=% active=%',
+        v_job.jobid,
+        v_job.jobname,
+        v_job.schedule,
+        v_job.command,
+        v_job.database,
+        v_job.username,
+        v_job.active;
+    end loop;
+
+    if not v_found then
+      raise notice 'CRON_JOB_METADATA = JOB_NOT_FOUND';
+    end if;
+  end if;
+end;
+$audit_cron_job$;
+
+do $audit_cron_runs$
+declare
+  v_run record;
+  v_found boolean := false;
+begin
+  if to_regclass('cron.job') is null
+     or to_regclass('cron.job_run_details') is null then
+    raise notice 'CRON_JOB_RUN_DETAILS = UNAVAILABLE';
+  else
+    for v_run in execute $query$
+      select
+        jobid,
+        status,
+        start_time,
+        end_time,
+        return_message
+      from cron.job_run_details
+      where jobid in (
+        select jobid
+        from cron.job
+        where jobname = 'rqs-uplink-dedup-retention-daily'
+      )
+      order by start_time desc
+      limit 20
+    $query$
+    loop
+      v_found := true;
+      raise notice
+        'CRON_JOB_RUN jobid=% status=% start_time=% end_time=% return_message=%',
+        v_run.jobid,
+        v_run.status,
+        v_run.start_time,
+        v_run.end_time,
+        v_run.return_message;
+    end loop;
+
+    if not v_found then
+      raise notice 'CRON_JOB_RUN_DETAILS = NO_MATCHING_RUNS';
+    end if;
+  end if;
+end;
+$audit_cron_runs$;
 
 select
   count(*) as total_rows,

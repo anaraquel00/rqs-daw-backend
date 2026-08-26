@@ -17,6 +17,14 @@ create table cron.job (
   jobname text not null unique
 );
 
+create table cron.job_run_details (
+  jobid bigint not null,
+  status text,
+  start_time timestamptz,
+  end_time timestamptz,
+  return_message text
+);
+
 create function cron.schedule(
   job_name text,
   schedule text,

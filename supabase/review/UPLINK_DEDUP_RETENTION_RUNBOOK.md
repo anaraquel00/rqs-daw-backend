@@ -19,10 +19,16 @@ A row can remain longer than 48 hours until the next successful run.
 
 1. Capture a fresh database backup and prove the restore procedure before any
    authorized environment change.
-2. Run `uplink_dedup_retention_audit.sql` read-only and retain its output.
+2. Run `uplink_dedup_retention_audit.sql` read-only before enabling anything
+   and retain its output. The audit reports `PG_CRON = ABSENT` without querying
+   missing cron catalogs, while still inspecting retention aggregates, indexes,
+   RLS/ACL, counters and the Tracking V3 RPC.
 3. Confirm the operator is the expected `postgres` migration owner.
-4. Confirm `pg_cron` and its supported `cron.schedule`/`cron.unschedule` APIs
-   exist, and that no job already uses the candidate name.
+4. Treat `PG_CRON = ABSENT` as a hard enable/availability gate. This source
+   candidate does not authorize enabling pg_cron on any environment. After a
+   separately authorized enablement, confirm the supported
+   `cron.schedule`/`cron.unschedule` APIs and exact catalog surface exist, and
+   that no job already uses the candidate name.
 5. Confirm the base Uplink tables, column contract, RLS/ACL contract and exact
    opportunistic 48-hour RPC cleanup have not drifted.
 6. Review `EXPLAIN` for the global timestamp-only predicate. The existing
@@ -35,18 +41,20 @@ A row can remain longer than 48 hours until the next successful run.
    psql -v ON_ERROR_STOP=1 -f uplink_dedup_retention_migration.sql
    ```
 
-8. Re-run the audit. Verify exact job metadata, active scheduler state, recent
-   run status, retention aggregates and unchanged counters.
+8. Re-run the audit after the migration. Verify exact job metadata, active
+   scheduler state, recent run status when `cron.job_run_details` is available,
+   retention aggregates and unchanged counters.
 
 Any missing object/API, unexpected policy/privilege, job-name collision,
 operator mismatch or RPC drift is a hard STOP.
 
 ## Validation
 
-- Insert controlled old and fresh salted-hash fixtures only in an authorized
-  non-Production test environment.
+- Insert controlled old and fresh salted-hash fixtures for at least two
+  different links only in an authorized non-Production test environment.
 - Execute the exact command stored in `cron.job`.
-- Prove old rows are removed and fresh rows are retained.
+- Prove old rows for both links are removed and fresh rows for both links are
+  retained.
 - Prove Uplink/profile counters, quotas, ownership, RPC definition, indexes and
   ACL/RLS are unchanged.
 - Wait for a scheduled execution and confirm its status through

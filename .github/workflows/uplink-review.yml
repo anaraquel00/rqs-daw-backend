@@ -103,6 +103,13 @@ jobs:
 
       - name: Execute fail-closed Uplink retention SQL matrix
         run: |
+          pre_enable_audit="$RUNNER_TEMP/uplink-retention-pre-enable-audit.log"
+          psql -v ON_ERROR_STOP=1 \
+            -o "$pre_enable_audit" \
+            -f supabase/review/uplink_dedup_retention_audit.sql
+          cat "$pre_enable_audit"
+          grep -F "PG_CRON = ABSENT" "$pre_enable_audit"
+
           if psql -v ON_ERROR_STOP=1 \
             -f supabase/review/uplink_dedup_retention_migration.sql; then
             echo "Expected missing-pg_cron preflight failure" >&2
@@ -111,6 +118,14 @@ jobs:
 
           psql -v ON_ERROR_STOP=1 \
             -f supabase/review/ci/uplink_dedup_retention_cron_fixture.sql
+
+          fixture_audit="$RUNNER_TEMP/uplink-retention-cron-fixture-audit.log"
+          psql -v ON_ERROR_STOP=1 \
+            -o "$fixture_audit" \
+            -f supabase/review/uplink_dedup_retention_audit.sql
+          cat "$fixture_audit"
+          grep -F "CRON_JOB = AVAILABLE" "$fixture_audit"
+          grep -F "CRON_JOB_RUN_DETAILS = AVAILABLE" "$fixture_audit"
 
           psql -v ON_ERROR_STOP=1 \
             -c "grant delete on public.rqs_uplink_click_dedup to authenticated"
@@ -134,6 +149,8 @@ jobs:
 
           psql -v ON_ERROR_STOP=1 \
             -f supabase/review/uplink_dedup_retention_migration.sql
+          psql -v ON_ERROR_STOP=1 \
+            -f supabase/review/uplink_dedup_retention_audit.sql
           psql -v ON_ERROR_STOP=1 \
             -f supabase/review/uplink_dedup_retention_tests.sql
 

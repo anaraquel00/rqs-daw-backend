@@ -51,6 +51,18 @@ begin
 end;
 $job_contract$;
 
+insert into public.rqs_uplinks (
+  id,
+  user_id,
+  custom_slug,
+  target_url
+) values (
+  '7749dcbb-5454-4b08-a634-4ca5e735b8c9',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  'retention-global-fixture-b',
+  'https://example.invalid/retention-global-fixture-b'
+);
+
 create temporary table _retention_uplink_before on commit drop as
 select coalesce(
          jsonb_agg(to_jsonb(s) order by s.id),
@@ -104,7 +116,7 @@ insert into public.rqs_uplink_click_dedup (
     statement_timestamp() - interval '72 hours'
   ),
   (
-    '6638dcbb-5454-4b08-a634-4ca5e735b8c9',
+    '7749dcbb-5454-4b08-a634-4ca5e735b8c9',
     repeat('2', 64),
     statement_timestamp() - interval '49 hours'
   ),
@@ -114,7 +126,7 @@ insert into public.rqs_uplink_click_dedup (
     statement_timestamp() - interval '47 hours 59 minutes'
   ),
   (
-    '6638dcbb-5454-4b08-a634-4ca5e735b8c9',
+    '7749dcbb-5454-4b08-a634-4ca5e735b8c9',
     repeat('4', 64),
     statement_timestamp() - interval '1 hour'
   );
@@ -141,17 +153,35 @@ begin
   if exists (
     select 1
     from public.rqs_uplink_click_dedup
-    where fingerprint_hash in (repeat('1', 64), repeat('2', 64))
+    where (link_id, fingerprint_hash) in (
+      (
+        '6638dcbb-5454-4b08-a634-4ca5e735b8c9'::uuid,
+        repeat('1', 64)
+      ),
+      (
+        '7749dcbb-5454-4b08-a634-4ca5e735b8c9'::uuid,
+        repeat('2', 64)
+      )
+    )
   ) then
-    raise exception 'TEST_FAIL: rows older than 48 hours were retained';
+    raise exception 'TEST_FAIL: global cleanup retained an old link row';
   end if;
 
   if (
     select count(*)
     from public.rqs_uplink_click_dedup
-    where fingerprint_hash in (repeat('3', 64), repeat('4', 64))
+    where (link_id, fingerprint_hash) in (
+      (
+        '6638dcbb-5454-4b08-a634-4ca5e735b8c9'::uuid,
+        repeat('3', 64)
+      ),
+      (
+        '7749dcbb-5454-4b08-a634-4ca5e735b8c9'::uuid,
+        repeat('4', 64)
+      )
+    )
   ) <> 2 then
-    raise exception 'TEST_FAIL: fresh rows were deleted';
+    raise exception 'TEST_FAIL: global cleanup deleted a fresh link row';
   end if;
 
   select coalesce(
