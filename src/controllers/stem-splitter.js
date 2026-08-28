@@ -25,8 +25,7 @@ const { getMasteringStorageConfig } = require('../lib/mastering-v2-storage');
 
 const MAX_STEMS_INPUT_BYTES = 256 * 1024 * 1024;
 const MAX_STEMS_DURATION_SECONDS = 600;
-// Keep one minute below Lambda's 900-second ceiling for S3 upload and cleanup.
-const DEMUCS_TIMEOUT_SECONDS = 840;
+const DEMUCS_TIMEOUT_SECONDS = 240;
 const FFPROBE_TIMEOUT_SECONDS = 15;
 const SIGNED_URL_TTL_SECONDS = 900;
 const PROCESS_KILL_GRACE_MS = 2_000;
