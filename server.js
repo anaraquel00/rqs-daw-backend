@@ -54,9 +54,16 @@ const videoRouter = require('./src/controllers/video-engine');
 const stemsRouter = require('./src/controllers/stem-splitter');
 const paymentRouter = require('./src/controllers/payment');
 
-// The legacy Full Master endpoint has no Project-1 server-side auth/quota
-// contract. Keep the legacy upload helper for Setlist compatibility, but make
-// the old processing path fail closed so it cannot bypass Mastering V2 quota.
+// The legacy Full Master endpoints have no Project-1 server-side auth/quota
+// contract. Fail closed before mounting the legacy router so they cannot
+// bypass the authenticated, owner-scoped Mastering V2 flow.
+app.get('/mastering/presigned-url', (req, res) => {
+    res.status(410).json({
+        error: 'Legacy mastering upload is retired. Use /mastering/v2/presigned-url.',
+        code: 'LEGACY_MASTERING_PRESIGN_RETIRED'
+    });
+});
+
 app.post('/mastering/process', (req, res) => {
     res.status(410).json({
         error: 'Legacy mastering processing is retired. Use /mastering/v2/process.',

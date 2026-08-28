@@ -36,6 +36,13 @@ const env = {
   ...process.env,
   PORT: String(port),
   RQS_ALLOWED_ORIGINS: allowedOrigin,
+  AWS_ACCESS_KEY_ID: 'test-only-placeholder',
+  AWS_SECRET_ACCESS_KEY: 'test-only-placeholder',
+  AWS_EC2_METADATA_DISABLED: 'true',
+  AWS_ENDPOINT_URL_S3: 'http://127.0.0.1:9',
+  RQS_MASTERING_V2_STORAGE_ENV: 'staging',
+  RQS_MASTERING_V2_BUCKET_NAME: 'rqs-mastering-test-staging',
+  RQS_MASTERING_V2_AWS_REGION: 'sa-east-1',
 };
 
 // Project 1 Final Beta must fail closed to WAITLIST_ONLY even when the
@@ -82,10 +89,36 @@ try {
   const payload = await payment.json();
   assert.equal(payload.code, 'PAYMENT_DISABLED');
 
+  const legacyPresigned = await fetch(`${baseUrl}/mastering/presigned-url?filename=test.wav`);
+  assert.equal(legacyPresigned.status, 410);
+  assert.equal((await legacyPresigned.json()).code, 'LEGACY_MASTERING_PRESIGN_RETIRED');
+
+  const legacyProcess = await fetch(`${baseUrl}/mastering/process`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(legacyProcess.status, 410);
+  assert.equal((await legacyProcess.json()).code, 'LEGACY_MASTERING_PROCESS_RETIRED');
+
+  const v2Presigned = await fetch(`${baseUrl}/mastering/v2/presigned-url?filename=test.wav`);
+  assert.equal(v2Presigned.status, 401);
+  assert.equal((await v2Presigned.json()).code, 'AUTH_REQUIRED');
+
+  const v2Process = await fetch(`${baseUrl}/mastering/v2/process`, {
+    method: 'POST',
+    body: new FormData(),
+  });
+  assert.equal(v2Process.status, 401);
+  assert.equal((await v2Process.json()).code, 'AUTH_REQUIRED');
+
   assert.equal(child.exitCode, null);
   console.log('FINAL_BETA_PAYMENT_DEFAULT_DISABLED: PASS');
   console.log('STAGING_RUNTIME_EXACT_CORS: PASS');
   console.log('FINAL_BETA_PROD_STRIPE_SECRET_REQUIRED: NO');
+  console.log('LEGACY_MASTERING_PRESIGN_RETIRED_HTTP: PASS');
+  console.log('LEGACY_MASTERING_PROCESS_RETIRED_HTTP: PASS');
+  console.log('MASTERING_V2_AUTH_REQUIRED_HTTP: PASS');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolve => {
