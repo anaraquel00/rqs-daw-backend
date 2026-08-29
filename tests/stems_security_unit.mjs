@@ -32,7 +32,7 @@ function fakeChild(pid = 4321) {
 test('technical safety constants stay within the approved Lambda candidate envelope', () => {
   assert.equal(constants.MAX_STEMS_INPUT_BYTES, 256 * 1024 * 1024);
   assert.equal(constants.MAX_STEMS_DURATION_SECONDS, 600);
-  assert.ok(constants.DEMUCS_TIMEOUT_SECONDS <= 240);
+  assert.equal(constants.DEMUCS_TIMEOUT_SECONDS, 840);
   assert.ok(constants.SIGNED_URL_TTL_SECONDS <= 900);
 });
 

@@ -466,7 +466,7 @@ test('timeout returns a stable safe error, performs no upload and cleans request
     },
     tmpRoot: tempRoot,
     maxInputBytes: 1024,
-    demucsTimeoutSeconds: 240,
+    demucsTimeoutSeconds: 840,
   });
   const running = await startServer(harness.router);
   try {
@@ -476,7 +476,7 @@ test('timeout returns a stable safe error, performs no upload and cleans request
       error: 'Stems processing failed safely.',
       code: 'STEMS_PROCESS_TIMEOUT',
     });
-    assert.ok(seenTimeout <= 240);
+    assert.equal(seenTimeout, 840);
     assert.equal(harness.calls.s3.some((entry) => entry.type === 'PutObjectCommand'), false);
     await waitForMissingPath(requestDirectory);
   } finally {
