@@ -57,3 +57,10 @@ ENV TORCH_HOME=/usr/src/app/torch_cache
 
 # 15. Força o download dos pesos do modelo (1 GB) durante o build do Docker na sua máquina
 RUN /opt/venv/bin/python3 -c "import os; os.environ['TORCH_HOME']='/usr/src/app/torch_cache'; from demucs.pretrained import get_model; get_model('htdemucs_6s')"
+
+# V1 CPU portability only: validated upstream 0.9.23 / -mavx (PR #466).
+# Install last so dependency resolution cannot replace the approved native wheel.
+COPY vendor/pedalboard/pedalboard-0.9.23-cp311-cp311-linux_x86_64.whl /opt/pedalboard-portable/
+RUN echo 'd0175688816effb48878c84e0f626e31f735d5b21f338354762546e13b10bca9  /opt/pedalboard-portable/pedalboard-0.9.23-cp311-cp311-linux_x86_64.whl' | sha256sum -c - \
+    && /opt/venv/bin/pip install --no-index --no-deps --force-reinstall /opt/pedalboard-portable/pedalboard-0.9.23-cp311-cp311-linux_x86_64.whl \
+    && /opt/venv/bin/pip check
