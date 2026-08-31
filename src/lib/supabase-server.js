@@ -99,6 +99,49 @@ async function verifySupabaseUser(req) {
   return user;
 }
 
+async function readAuthenticatedProfileRole(req, userId) {
+  if (typeof userId !== 'string' || !userId.trim()) {
+    throw new RqsHttpError(403, 'Canonical user profile is invalid.', 'SETLIST_PROFILE_INVALID');
+  }
+
+  const token = extractBearerToken(req);
+  let response;
+  try {
+    const query = new URLSearchParams({
+      id: `eq.${userId.trim()}`,
+      select: 'role',
+      limit: '2',
+    });
+    response = await supabaseFetch(`/rest/v1/profiles?${query.toString()}`, {
+      userToken: token,
+      extraHeaders: { Accept: 'application/json' },
+    });
+  } catch (error) {
+    if (error instanceof RqsHttpError && error.code === 'SERVER_CONFIG_MISSING') throw error;
+    throw new RqsHttpError(502, 'Canonical profile service unavailable.', 'SETLIST_PROFILE_INVALID');
+  }
+
+  if (!response.ok) {
+    throw new RqsHttpError(502, 'Canonical profile service error.', 'SETLIST_PROFILE_INVALID');
+  }
+
+  let profiles;
+  try {
+    profiles = await readJsonSafe(response);
+  } catch {
+    throw new RqsHttpError(502, 'Canonical profile service error.', 'SETLIST_PROFILE_INVALID');
+  }
+  if (!Array.isArray(profiles) || profiles.length !== 1) {
+    throw new RqsHttpError(403, 'Canonical user profile is invalid.', 'SETLIST_PROFILE_INVALID');
+  }
+
+  const role = profiles[0]?.role;
+  if (role !== 'free' && role !== 'premium') {
+    throw new RqsHttpError(403, 'Canonical user profile is invalid.', 'SETLIST_PROFILE_INVALID');
+  }
+  return role;
+}
+
 function assertUserOwnedS3Key(s3Key, userId) {
   if (typeof s3Key !== 'string' || !s3Key || s3Key.length > 1024) {
     throw new RqsHttpError(400, 'Invalid S3 audio key.', 'S3_KEY_INVALID');
@@ -180,6 +223,7 @@ module.exports = {
   RqsHttpError,
   extractBearerToken,
   verifySupabaseUser,
+  readAuthenticatedProfileRole,
   assertUserOwnedS3Key,
   reserveMasteringQuota,
   confirmMasteringQuota,
