@@ -1,0 +1,5 @@
+ ddaa09110392a4419fecbb6d3022bede89b7e841 JUCE (6.0.8-910-gddaa091103)
+ 1f5cc9487284d5950343aa5d4f70de433468070a vendors/lame (heads/master)
+ 98f1708fb5e06a0dfebd58a3b40d610823db9715 vendors/libgsm (heads/master)
+ 0c69e1eb2177fa8f8580632c7b1f97fdb606ce8f vendors/pybind11 (v2.11.0-130-g0c69e1eb)
+ 2be46b0dffb13273a67396c77bc9278736bb03d2 vendors/rubberband (v3.3.0)

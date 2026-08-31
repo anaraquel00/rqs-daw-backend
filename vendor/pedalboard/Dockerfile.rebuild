@@ -1,0 +1,38 @@
+ARG VALIDATED_RUNTIME_BASE
+FROM ${VALIDATED_RUNTIME_BASE} AS pedalboard-builder
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    build-essential python3-dev cmake ninja-build pkg-config libfreetype6-dev libasound2-dev git \
+    && rm -rf /var/lib/apt/lists/*
+RUN /opt/venv/bin/python -m venv /build-venv \
+    && /build-venv/bin/pip install --no-cache-dir scikit-build-core==0.12.2 pybind11==2.11.1 packaging==26.3 pathspec==1.1.1
+RUN git clone --no-checkout https://github.com/spotify/pedalboard.git /src/pedalboard \
+    && cd /src/pedalboard \
+    && git checkout --detach 87db53bb790ce21bb5da959dc92d462d3858f4fd \
+    && git -c url.https://github.com/.insteadOf=git@github.com: submodule update --init --recursive \
+    && test -z "$(git status --porcelain)"
+COPY pedalboard-portable.patch /build-input/pedalboard-portable.patch
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    libx11-dev libxrandr-dev libxinerama-dev libxrender-dev libxcomposite-dev libxcursor-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN cd /src/pedalboard \
+    && git apply --check /build-input/pedalboard-portable.patch \
+    && git apply /build-input/pedalboard-portable.patch \
+    && git diff --check \
+    && mkdir /wheelhouse \
+    && git diff > /wheelhouse/upstream-portability.diff \
+    && git submodule status --recursive > /wheelhouse/upstream-submodules.txt \
+    && /build-venv/bin/pip freeze > /wheelhouse/build-python-lock.txt \
+    && dpkg-query -W > /wheelhouse/build-debian-packages.txt
+ENV CMAKE_BUILD_PARALLEL_LEVEL=2
+RUN cd /src/pedalboard \
+    && test -z "${USE_MARCH_NATIVE+x}" \
+    && SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" /build-venv/bin/pip wheel \
+       --no-deps --no-build-isolation --wheel-dir /wheelhouse \
+       --config-settings=build-dir=/build/pedalboard --config-settings=cmake.define.CMAKE_EXPORT_COMPILE_COMMANDS=ON . \
+    && cp /build/pedalboard/compile_commands.json /wheelhouse/compile_commands.json \
+    && ! grep -E -- '-m(arch|cpu)=native|-mavx2|-mfma|-mavx512' /wheelhouse/compile_commands.json \
+    && grep -q -- '-mavx' /wheelhouse/compile_commands.json \
+    && sha256sum /wheelhouse/*.whl > /wheelhouse/WHEEL_SHA256.txt
+
+FROM scratch AS wheel-export
+COPY --from=pedalboard-builder /wheelhouse /
